@@ -14,6 +14,7 @@ pub struct Image {
 const BLUR: f32 = 0.5;
 const SIGMA: f32 = 1.6;
 const INTERVAL: f32 = 3.;
+const CONTRAST_THESHOLD: f32 = 0.04; // from OpenCV implementation
 
 impl Image {
     pub fn new(input_path: &str) -> Result<Image> {
@@ -423,6 +424,7 @@ impl Image {
         let images = self.sift_generate_images(octaves, &gaussian_kernels[..])?;
         let dogs = self.sift_dogs(&images[..], octaves)?;
 
+        let keypoints = self.sift_keypoints(octaves, &images[..], &dogs[..])?;
 
         Ok(())
     }
@@ -617,6 +619,198 @@ impl Image {
 
         Ok(d)
     }
+
+    // First, we generate scale-space extrema
+    fn sift_keypoints(&self, octaves: u32, images: &[OctaveImage], dogs: &[Vec<f32>] ) -> Result<()> {
+        let kp = self.sift_scale_space_extrema(octaves, images, dogs)?;
+        Ok(())
+    }
+
+    // Find pixel positions of all scale-space extrema in the image pyramid
+    fn sift_scale_space_extrema(&self, octaves: u32, images: &[OctaveImage], dogs: &[Vec<f32>]) -> Result<()> {
+        let threshold = (0.5 * 255. * CONTRAST_THESHOLD / INTERVAL).floor(); // from OpenCV implementation
+
+        let octaves = octaves as usize;
+        let imgs_in_octave = images.len() / octaves; 
+        let dogs_in_octave = dogs.len() / octaves;
+
+        scope(|s| {
+            for o in 0 .. octaves {
+                let (w, h) = {
+                    let first_in_octave = images.get(o * imgs_in_octave).unwrap();
+                    (first_in_octave.w as usize, first_in_octave.h as usize)
+                };
+                
+                for i in 0 .. dogs_in_octave - 2 {
+                    let img0 = (o * dogs_in_octave) + i;
+                    let (img1, img2) = (img0 + 1, img0 + 2);
+                    
+                    s.spawn(move |_| {
+                        println!("Triplets for Octave[{o}][w[{w}] h[{h}]]: {img0} {img1} {img2}");
+                        let im0 = &dogs.get(img0).unwrap();
+                        let im1 = &dogs.get(img1).unwrap();
+                        let im2 = &dogs.get(img2).unwrap();
+
+                        im1.par_iter()
+                            .skip(w - 1)
+                            .take(w * (h - 2) - 1)
+                            .enumerate()
+                            .for_each(|(i, p)| {
+                                let fl = i % w;
+                                {
+                                    if fl == 0 || fl == 1 {
+                                        return;
+                                    }
+                                }
+                                
+                                // At this stage, the current `p` is the center pixel because we are iterating over the middle image.
+                                if p.abs() <= threshold {
+                                    return;
+                                }
+
+                                // Here, we are going to find out the true indexes of all other pixels to be evaluated
+                                let cent = w + i;
+                                let top = cent - w;
+                                let bot = cent + w;
+                                let left = cent - 1;
+                                let right = cent + 1;
+                                let topleft = top - 1;
+                                let topright = top + 1;
+                                let botleft = bot - 1;
+                                let botright = bot + 1;
+                                
+                                // let p = *p;
+
+                                // now we have to evaluate agaist 27 points from all three images.
+                                // This would essentially represent a 3 x 3 x 3 array
+                                let px_cube: [f32; 27] = [
+                                    im0[topleft], im0[top], im0[topright],
+                                    im0[left], im0[cent], im0[right],
+                                    im0[botleft], im0[bot], im0[botright],
+                                    im1[topleft], im1[top], im1[topright],
+                                    im1[left], im1[cent], im1[right],
+                                    im1[botleft], im1[bot], im1[botright],
+                                    im2[topleft], im2[top], im2[topright],
+                                    im2[left], im2[cent], im2[right],
+                                    im2[botleft], im2[bot], im2[botright]
+                                ];
+                                
+                                if !Self::check_local_maxima_minima(px_cube) {
+                                    return;
+                                }
+
+                                let local_extremum = Self::sift_localize_extremum_via_quadratic(&px_cube);
+                                // if !(
+                                //     // greater than all equals all
+                                //     (
+                                //         p > 0. &&
+                                //         p >= im0[cent] && p >= im2[cent] && 
+                                //         p >= im0[top] && p >= im1[top] && p >= im2[top] &&
+                                //         p >= im0[bot] && p >= im1[bot] && p >= im2[bot] &&
+                                //         p >= im0[left] && p >= im1[left] && p >= im2[left] &&
+                                //         p >= im0[right] && p >= im1[right] && p >= im2[right] &&
+                                //         p >= im0[topleft] && p >= im1[topleft] && p >= im2[topleft] &&
+                                //         p >= im0[topright] && p >= im1[topright] && p >= im2[topright] &&
+                                //         p >= im0[botleft] && p >= im1[botleft] && p >= im2[botleft] &&
+                                //         p >= im0[botright] && p >= im1[botright] && p >= im2[botright]
+                                //     ) ||
+                                //     // less than equals all
+                                //     (
+                                //         p < 0. &&
+                                //         p <= im0[cent] && p <= im2[cent] && 
+                                //         p <= im0[top] && p <= im1[top] && p <= im2[top] &&
+                                //         p <= im0[bot] && p <= im1[bot] && p <= im2[bot] &&
+                                //         p <= im0[left] && p <= im1[left] && p <= im2[left] &&
+                                //         p <= im0[right] && p <= im1[right] && p <= im2[right] &&
+                                //         p <= im0[topleft] && p <= im1[topleft] && p <= im2[topleft] &&
+                                //         p <= im0[topright] && p <= im1[topright] && p <= im2[topright] &&
+                                //         p <= im0[botleft] && p <= im1[botleft] && p <= im2[botleft] &&
+                                //         p <= im0[botright] && p <= im1[botright] && p <= im2[botright]
+                                //     )
+                                // ) {
+                                //     return;
+                                // }
+
+                            })
+                    });
+                }
+            }
+        });
+        
+        Ok(())
+    }
+
+    fn check_local_maxima_minima(check: [f32; 27]) -> bool {
+        let p = check[13];
+
+        if p > 0. {
+            for (i, _p) in check.iter().enumerate() {
+                if i == 13 {
+                    continue;
+                }
+                if _p < &p {
+                    return false;
+                }
+            }
+
+            return true;
+        } else if p < 0. {
+            for (i, _p) in check.iter().enumerate() {
+                if i == 13 {
+                    continue;
+                }
+                if _p > &p {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        false
+    }
+
+    fn sift_localize_extremum_via_quadratic(px_cube: &[f32; 27]) -> Option<()> {
+        const ATT_TO_CONVERGE: usize = 5;
+
+        for i in 0 .. ATT_TO_CONVERGE {
+            let grad = Self::sift_compute_gradient(px_cube);
+            let hess = Self::sift_compute_hessian(px_cube);
+            // let grad = Self::sift_compute_gradient(px_cube);
+        }
+
+        None
+    }
+
+    // Approximate gradient at center pixel [1, 1, 1] of 3x3x3 array using central difference formula of order O(h^2), where h is the step size
+    // https://medium.com/@russmislam/implementing-sift-in-python-a-complete-guide-part-1-306a99b50aa5
+
+    // With step size h, the central difference formula of order O(h^2) for f'(x) is (f(x + h) - f(x - h)) / (2 * h)
+    // Here h = 1, so the formula simplifies to f'(x) = (f(x + 1) - f(x - 1)) / 2
+    // NOTE: x corresponds to second array axis, y corresponds to first array axis, and s (scale) corresponds to third array axis
+    fn sift_compute_gradient(px_cube: &[f32; 27]) -> [f32; 3] {
+        let dx = 0.5 * (px_cube[14] - px_cube[12]);
+        let dy = 0.5 * (px_cube[16] - px_cube[10]);
+        let ds = 0.5 * (px_cube[22] - px_cube[4]);
+        
+        [dx, dy, ds]
+    }
+
+    // Approximate Hessian at center pixel [1, 1, 1] of 3x3x3 array using central difference formula of order O(h^2), where h is the step size
+    // https://medium.com/@russmislam/implementing-sift-in-python-a-complete-guide-part-1-306a99b50aa5
+
+    // With step size h, the central difference formula of order O(h^2) for f''(x) is (f(x + h) - 2 * f(x) + f(x - h)) / (h ^ 2)
+    // Here h = 1, so the formula simplifies to f''(x) = f(x + 1) - 2 * f(x) + f(x - 1)
+    // With step size h, the central difference formula of order O(h^2) for (d^2) f(x, y) / (dx dy) = (f(x + h, y + h) - f(x + h, y - h) - f(x - h, y + h) + f(x - h, y - h)) / (4 * h ^ 2)
+    // Here h = 1, so the formula simplifies to (d^2) f(x, y) / (dx dy) = (f(x + 1, y + 1) - f(x + 1, y - 1) - f(x - 1, y + 1) + f(x - 1, y - 1)) / 4
+    // NOTE: x corresponds to second array axis, y corresponds to first array axis, and s (scale) corresponds to third array axis
+    fn sift_compute_hessian(px_cube: &[f32; 27]) -> [f32; 9] {
+        let px_cent = px_cube[13];
+
+        // todo!("Re-visit this when we have some free time!");
+
+        [0.; 9]
+    }
+
 }
 
 #[cfg(test)]
@@ -638,7 +832,7 @@ mod tests {
         let mut im = Image::new("data/1_small.png")?;
         im.visualize();
 
-        im.sift()?;
+        im.sift().unwrap();
 
         Ok(())
     }
