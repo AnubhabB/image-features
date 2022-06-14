@@ -772,11 +772,15 @@ impl Image {
     fn sift_localize_extremum_via_quadratic(px_cube: &[f32; 27]) -> Option<()> {
         const ATT_TO_CONVERGE: usize = 5;
 
-        for i in 0 .. ATT_TO_CONVERGE {
+        // for i in 0 .. ATT_TO_CONVERGE {
             let grad = Self::sift_compute_gradient(px_cube);
             let hess = Self::sift_compute_hessian(px_cube);
-            // let grad = Self::sift_compute_gradient(px_cube);
-        }
+
+            println!("{:?} {:?}", grad, hess);
+            // Here we need to do a least square solution
+            // So: [0.5, 0.0, 0.0] [-1.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.25, 0.0] -> -(lstsq(hess, grad)[0]) -> [ 0.5, -0. , -0. ]
+            
+        // }
 
         None
     }
@@ -806,18 +810,29 @@ impl Image {
     fn sift_compute_hessian(px_cube: &[f32; 27]) -> [f32; 9] {
         let px_cent = px_cube[13];
 
-        // todo!("Re-visit this when we have some free time!");
+        let dxx = px_cube[14] - 2. * px_cent + px_cube[12];
+        let dyy = px_cube[16] - 2. * px_cent + px_cube[13];
+        let dss = px_cube[22] - 2. * px_cent + px_cube[4];
+        let dxy = 0.25 * (px_cube[17] - px_cube[15] - px_cube[11] + px_cube[9]);
+        let dxs = 0.25 * (px_cube[23] - px_cube[21] - px_cube[5] + px_cube[3]);
+        let dys = 0.25 * (px_cube[25] - px_cube[19] - px_cube[7] + px_cube[2]);
 
-        [0.; 9]
+        [
+            dxx, dxy, dxs,
+            dxy, dyy, dys,
+            dxs, dys, dss
+        ]
     }
 
 }
 
 #[cfg(test)]
 mod tests {
+    use std::f32::EPSILON;
+
     use super::Image;
 
-    use anyhow::Result;
+    use anyhow::{Result, Ok};
 
     #[test]
     fn hod() -> Result<()> {
@@ -830,10 +845,29 @@ mod tests {
     #[test]
     fn sift() -> Result<()> {
         let mut im = Image::new("data/1_small.png")?;
-        im.visualize();
+        // im.visualize();
 
         im.sift().unwrap();
 
+        Ok(())
+    }
+
+    #[test]
+    fn lstsq() -> Result<()> {
+        use nalgebra::{OMatrix, OVector, U3};
+        // So: [0.5, 0.0, 0.0] [-1.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.25, 0.0] -> -(lstsq(hess, grad)[0]) -> [ 0.5, -0. , -0. ]
+
+        let hess = OMatrix::<f32, U3, U3>::from_row_slice(&[
+            -1.0, 0.0, 0.0,
+            0.0, 0.0, 0.25, 
+            0.0, 0.25, 0.0
+        ]);
+        
+        let grad = OVector::<f32, U3>::from_row_slice(&[0.5, 0.0, 0.0]);
+
+        let lst = -(lstsq::lstsq(&hess, &grad, EPSILON).unwrap().solution);
+        
+        println!("{:?}", &lst);
         Ok(())
     }
 }
