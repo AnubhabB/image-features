@@ -3,8 +3,6 @@
 use std::f32::consts::PI;
 
 use image::{ImageBuffer, Luma, Pixel};
-use parking_lot::RwLock;
-use rayon::iter::{IntoParallelRefIterator, IndexedParallelIterator, ParallelIterator};
 
 pub fn blur_f32( image_f32: &ImageBuffer<Luma<f32>, Vec<f32>>, sigma: f32 ) -> ImageBuffer<Luma<f32>, Vec<f32>> {
     let sigma = if sigma <= 0.0 { 1.0 } else { sigma };
@@ -161,7 +159,7 @@ mod tests {
 
     #[test]
     fn blur() -> Result<()> {
-        let mut im = image::open("data/1_small.png").unwrap();
+        let im = image::open("data/1_small.png").unwrap();
         let dim = im.dimensions();
         let im = im.grayscale().resize((dim.0 * 2) as u32, (dim.1 * 2) as u32, imageops ::FilterType::Nearest);
 
@@ -170,8 +168,8 @@ mod tests {
 
         let im1 = blur_f32(&im.to_luma32f(), sigma);
         let im2 = im.blur(sigma).to_luma8();
-        // println!("{:?}", &img.to_vec()[0..1000]);
-        // println!("{:?}", &im2.to_vec()[0..1000]);
+        println!("{:?}", &im1.to_vec()[0..1000]);
+        println!("{:?}", &im2.to_vec()[0..1000]);
         Ok(())
     }
 
