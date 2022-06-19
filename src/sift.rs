@@ -1,13 +1,12 @@
-use std::borrow::Borrow;
 use std::f32::{consts::E, EPSILON};
 use std::iter::zip;
 use std::ops::Div;
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc};
 
 use image::imageops::resize;
 use image::{DynamicImage, GenericImageView, save_buffer_with_format, ColorType, imageops, ImageBuffer, Luma};
 use anyhow::{Result};
-use nalgebra::{OMatrix, U3, OVector, U1, ComplexField, DMatrix, Matrix3, Vector3};
+use nalgebra::{OMatrix, U3, U1, DMatrix, Matrix3, Vector3};
 use parking_lot::RwLock;
 use rayon::{scope, iter::{IntoParallelRefMutIterator, IndexedParallelIterator, ParallelIterator, IntoParallelRefIterator}};
 
@@ -38,13 +37,13 @@ struct OctaveImage {
 }
 
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct KeyPoint {
     prc: (usize, usize),
     oct: usize,
     size: f32,
     res: f32,
-    orientation: f32
+    angle: f32
 }
 
 impl Sift {
@@ -72,7 +71,10 @@ impl Sift {
         self.dogs()?;
 
         let keypoints = self.scale_space_extrema()?;
-        println!("{:?}",&keypoints[0..10]);
+        let desciptors = self.generate_descriptors(&keypoints[..])?;
+        
+        // println!("{:?}", keypoints);
+
         Ok(())
     }
 
@@ -344,8 +346,49 @@ impl Sift {
                 }
             }
         });
+        
+        // Sort keypoints and remove duplicates if any
+        {
+            let mut w = keypoints.write();
+            w.sort_unstable_by(|k1, k2| {
+                if k1.prc.0 != k2.prc.0 {
+                    return k1.prc.0.cmp(&k2.prc.0);
+                }
+    
+                if k1.prc.1 != k2.prc.1 {
+                    return k2.prc.1.cmp(&k2.prc.1);
+                }
+    
+                if k1.size != k2.size && let Some(o) = k1.size.partial_cmp(&k2.size) {
+                    return o;
+                }
+    
+                if k1.angle != k2.angle && let Some(o) = k1.angle.partial_cmp(&k2.angle) {
+                    return o;
+                }
+    
+                if k1.res != k2.res && let Some(o) = k1.res.partial_cmp(&k2.res) {
+                    return o;
+                }
+    
+                k1.oct.cmp(&k2.oct)
+            });
+            w.dedup();
+
+            // rescaling keypoints as per https://medium.com/@russmislam/implementing-sift-in-python-a-complete-guide-part-2-c4350274be2b
+            // not sure of the `WHY` for the octave though
+            w.iter_mut()
+            .for_each(|k| {
+                k.prc = (k.prc.0/ 2, k.prc.1/2);
+                k.size *= 0.5;
+                k.oct = (k.oct & !255) | ((k.oct - 1) & 255);
+            });
+
+        }
+
 
         let kp = keypoints.read().clone();
+
         Ok(kp)
     }
 
@@ -430,7 +473,7 @@ impl Sift {
             return None;
         }
 
-        return Some((KeyPoint{
+        Some((KeyPoint{
             prc: (
                 ((r as f32 + lstq[0]) * 2_f32.powf(octave_idx as f32)) as usize,
                 ((c as f32 + lstq[1]) * 2_f32.powf(octave_idx as f32)) as usize
@@ -443,107 +486,8 @@ impl Sift {
                 2_f32.powf(octave_idx as f32 + 1.)
             ),
             res: val_at_extremum.abs(),
-            orientation: 0.
-        }, imidx));
-        // let mut im1_idx = im1_idx;
-        // let mut px_idx = px_idx;
-        // let dogs_in_octave = self.dogs.len() / self.octaves as usize;
-
-        // let mut converge = false;
-
-        // let (octw, octh) = {
-        //     let octim = self.images.get(im1_idx).unwrap();
-        //     (octim.w, octim.h)
-        // };
-
-        // let mut px_cube: [f32; 27] = [0.; 27];
-        // let mut grad: OVector<f32, U3> = OVector::default();
-        // let mut hess: OMatrix<f32, U3, U3> = OMatrix::default();
-        // let mut lq: OMatrix<f32, U3, U1> = OMatrix::default();
-        // // let mut 
-
-        // for _ in 0 .. 5 {
-        //     let im0 = &self.dogs.get(im1_idx - 1).unwrap()[..];
-        //     let im1 = &self.dogs.get(im1_idx).unwrap()[..];
-        //     let im2 = &self.dogs.get(im1_idx + 1).unwrap()[..];
-        //     // let octw = im0.w;
-
-        //     px_cube = Self::px_cube(im0, im1, im2, Self::index_cube_from_center_and_width(octw as usize, px_idx));
-        //     grad = OVector::<f32, U3>::from_row_slice(&Self::compute_gradient(&px_cube));
-        //     hess = OMatrix::<f32, U3, U3>::from_row_slice(&Self::compute_hessian(&px_cube));
-
-        //     lq = -lstsq::lstsq(&hess, &grad, EPSILON).unwrap().solution;
-
-        //     if lq[0].abs() < 0.5 && lq[1].abs() < 0.5 && lq[2].abs() < 0.5 {
-        //         converge = true;
-        //         break;
-        //     }
-
-        //     // increase row count by round(lstsq.1)
-        //     // increase column count by round(lstsq.0)
-        //     px_idx += (lq[1].round() as usize * octw as usize) + lq[0].round() as usize;
-
-        //     // check if px falls in range of valid pixels within this image size in octave
-        //     {
-        //         let row = px_idx as u32 / octh;
-        //         let col = px_idx as u32 % octw;
-
-        //         if row == 0 || row == octh || col == 0 || col == octw {
-        //             break
-        //         }
-        //     }
-
-        //     // Now, check if image index lies in valid range
-        //     {
-        //         im1_idx += lq[2].round() as usize;
-        //         let im_col = im1_idx % dogs_in_octave;
-
-        //         if im_col < 1 || im_col > INTERVAL as usize || im1_idx / dogs_in_octave != octave_idx {
-        //             break;
-        //         }
-        //     }
-        // }
-
-        // if !converge {
-        //     return None;
-        // }
-
-        // let f_val = (px_cube[13] + 0.5 * grad.dot(&lq)).abs();
-        // if f_val.abs() * INTERVAL < CONTRAST_THESHOLD {
-        //     return None;
-        // }
-
-        // // here we work with hesssian[:2,:2] in numpy api
-        // let xy_hess = hess.slice((0, 0), (2, 2));
-        // let trace = xy_hess.trace();
-        // let det = xy_hess.determinant();
-
-        // if det <= 0. || EIGENVALUE_RATIO * trace.powf(2.) >= (EIGENVALUE_RATIO + 1.).powf(2.) * det {
-        //     return None;
-        // }
-
-        // // contrast check passed
-        // let mut kp = KeyPoint::default();
-        // let oct_pow = 2_f32.powf(octave_idx as f32);
-
-        // let pw = px_idx % octw as usize;
-        // let ph = px_idx / octw as usize;
-
-        // // image index in octave
-        // let im1_oct_idx = (im1_idx / dogs_in_octave) + (im1_idx % dogs_in_octave);
-
-        // kp.pwh = (
-        //     ((pw as f32 + lq[0]) * oct_pow) as usize,
-        //     ((ph as f32 + lq[1]) * oct_pow) as usize,
-        // );
-        // kp.pi = kp.pwh.0 * octw as usize + kp.pwh.1;
-        // kp.size = SIGMA * 2_f32.powf((im1_oct_idx as f32 + lq[2]) / INTERVAL as f32) * 2_f32.powf(octave_idx as f32 + 1.);
-        // kp.res = f_val;
-        // kp.idx = im1_idx;
-        // kp.idx_oct = im1_oct_idx;
-        
-        // Some(kp)
-        None
+            angle: 0.
+        }, imidx))
     }
 
     fn gaussian_kernels(sigma: f32, intervals: f32) -> Vec<f32> {
@@ -622,51 +566,6 @@ impl Sift {
 
     }
 
-    fn check_local_maxima_minima(check: [f32; 27]) -> bool {
-        let p = check[13];
-
-        if p > 0. {
-            for (i, _p) in check.iter().enumerate() {
-                if i == 13 {
-                    continue;
-                }
-                if _p < &p {
-                    return false;
-                }
-            }
-
-            return true;
-        } else if p < 0. {
-            for (i, _p) in check.iter().enumerate() {
-                if i == 13 {
-                    continue;
-                }
-                if _p > &p {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-        false
-    }
-
-    // fn sift_localize_extremum_via_quadratic(px_cube: &[f32; 27]) -> Option<()> {
-    //     const ATT_TO_CONVERGE: usize = 5;
-
-    //     // for i in 0 .. ATT_TO_CONVERGE {
-    //         let grad = Self::sift_compute_gradient(px_cube);
-    //         let hess = Self::sift_compute_hessian(px_cube);
-
-    //         println!("{:?} {:?}", grad, hess);
-    //         // Here we need to do a least square solution
-    //         // So: [0.5, 0.0, 0.0] [-1.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.25, 0.0] -> -(lstsq(hess, grad)[0]) -> [ 0.5, -0. , -0. ]
-            
-    //     // }
-
-    //     None
-    // }
-
     // Approximate gradient at center pixel [1, 1, 1] of 3x3x3 array using central difference formula of order O(h^2), where h is the step size
     // https://medium.com/@russmislam/implementing-sift-in-python-a-complete-guide-part-1-306a99b50aa5
 
@@ -711,27 +610,6 @@ impl Sift {
         ])
     }
 
-    fn px_cube(im0: &[f32], im1: &[f32], im2: &[f32], px: [usize; 9]) -> [f32; 27] {
-        [
-            im0[px[0]], im0[px[1]], im0[px[2]],
-            im0[px[3]], im0[px[4]], im0[px[5]],
-            im0[px[6]], im0[px[7]], im0[px[8]],
-            im1[px[0]], im1[px[1]], im1[px[2]],
-            im1[px[3]], im1[px[4]], im1[px[5]],
-            im1[px[6]], im1[px[7]], im1[px[8]],
-            im2[px[0]], im2[px[1]], im2[px[2]],
-            im2[px[3]], im2[px[4]], im2[px[5]],
-            im2[px[6]], im2[px[7]], im2[px[8]],
-        ]
-    }
-
-    fn index_cube_from_center_and_width(w: usize, cent: usize) -> [usize; 9] {
-        [
-            cent - w - 1, cent - w, cent - w + 1, 
-            cent - 1, cent, cent + 1, 
-            cent + w - 1, cent + w, cent + w + 1
-        ]
-    }
 
     // Compute orientations for each keypoint
     fn compute_keypoint_orientation(&self, kp: &KeyPoint, octave_idx: usize, oct_w: usize, oct_h: usize, img_idx: usize) -> Vec<KeyPoint> {
@@ -836,12 +714,111 @@ impl Sift {
             }
 
             let mut kp = kp.clone();
-            kp.orientation = orient;
+            kp.angle = orient;
 
             keypoint_with_orient.push(kp);
         }
         
         keypoint_with_orient
+    }
+
+    fn generate_descriptors(&self, kp: &[KeyPoint]) -> Result<()> {
+        const NUM_BINS: f32 = 8.;
+        const WINDOW_WIDTH: f32 = 4.;
+        const SCALE_MULT: f32 = 3.;
+
+        let imgs = &self.images[..];
+        let octlen = imgs.len() as i32;
+
+        kp
+        .iter()
+        .for_each(|k| {
+            let (mut octave, layer, scale) = Self::unpack_octave(k);
+            if octave < 0 {
+                octave = octlen - octave;
+            }
+            
+            if octave >= octlen {
+                octave %= octlen;
+            }
+            
+            let img = &imgs[octave as usize][layer];
+            let (num_r, num_c) = (img.h, img.w);
+            let point = ((k.prc.0 as f32 * scale).round() as usize, (k.prc.1 as f32 * scale).round() as usize);
+            let bins_per_deg = NUM_BINS/ 360.;
+            let angle = 360. - k.angle;
+            let angle_rad = angle.to_radians();
+
+            let cos_angle = angle_rad.cos();
+            let sin_angle = angle_rad.sin();
+
+            let weight_mul = -0.5/ ((0.5 * WINDOW_WIDTH).powf(2.));
+            let mut row_bin_list = Vec::new();
+            let mut col_bin_list = Vec::new();
+            let mut mag_list = Vec::new();
+            let mut orient_bin_list = Vec::new();
+
+            // Descriptor window size (described by half_width) follows OpenCV convention
+            let hist_width = SCALE_MULT * scale * 0.5 * k.size;
+            let half_width = ((hist_width * 2_f32.sqrt() * (WINDOW_WIDTH + 1.) * 0.5).round() as i32).min(
+                ((num_r.pow(2) + num_c.pow(2)) as f32).sqrt().round() as i32
+            );
+
+            for r in -half_width .. half_width + 1 {
+                for c in -half_width .. half_width + 1 {
+                    let (r, c) = (r as f32, c as f32);
+                    let r_rot = c * sin_angle + r * cos_angle;
+                    let c_rot = c * cos_angle + r * sin_angle;
+                    let r_bin = (r_rot / hist_width) + 0.5 * WINDOW_WIDTH - 0.5;
+                    let c_bin = (c_rot / hist_width) + 0.5 * WINDOW_WIDTH - 0.5;
+
+                    if r_bin <= -1. || r_bin >= WINDOW_WIDTH || c_bin <= -1. || c_bin >= WINDOW_WIDTH {
+                        continue;
+                    }
+
+                    let window_r = (point.1 as f32 + r).round() as u32;
+                    let window_c = (point.0 as f32 + c).round() as u32;
+
+                    if window_r == 0 || window_r >= num_r - 1 || window_c == 0 || window_c >= num_c - 1 {
+                        continue;
+                    } 
+                    
+                    let (grad_mag, grad_orient) = if let Some(img) = &img.v {
+                        let dx = img.index((window_r as usize, window_c as usize + 1)) - img.index((window_r as usize, window_c as usize + 1));
+                        let dy = img.index((window_r as usize - 1, window_c as usize)) - img.index((window_r as usize + 1, window_c as usize));
+                        ((dx.powf(2.) + dy.powf(2.)).sqrt(), dy.atan2(dx).to_degrees() % 360.)
+                    } else {
+                        continue;
+                    };
+
+                    let weight = (weight_mul * ((r_rot / hist_width).powf(2.) + (c_rot / hist_width).powf(2.))).exp();
+
+                    row_bin_list.push(r_bin);
+                    col_bin_list.push(c_bin);
+                    mag_list.push(weight * grad_mag);
+                    orient_bin_list.push((grad_orient - angle) * bins_per_deg);
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    fn unpack_octave(kp: &KeyPoint) -> (i32, usize, f32) {
+        let mut octave = kp.oct as i32 & 255;
+        let layer = (kp.oct >> 8) & 255;
+        if octave >= 128 {
+            octave |= -128;
+        }
+
+        // scale = 1 / float32(1 << octave) if octave >= 0 else float32(1 << -octave)
+        let scale = if octave >= 0 {
+            1. / (1 << octave as i32) as f32
+        } else {
+            (1 << -octave as i32)  as f32
+        };
+
+        (octave, layer, scale)
     }
 }
 
