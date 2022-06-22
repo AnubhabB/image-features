@@ -56,7 +56,7 @@ impl Sift {
                 let px = opn.get_pixel(c, r).0;
                 let g = (0.299 * px[0] as f32) + (0.587 * px[1] as f32) + (0.114 * px[2] as f32);
                 // img.put_pixel(c, r, Rgba([g, g, g, 255]));  
-                let pxl = Luma::<f32>::from([g]);
+                let pxl = Luma::<f32>::from([g.round()]);
                 img.put_pixel(c, r, pxl);
             }
         }
@@ -84,17 +84,16 @@ impl Sift {
         self.build_gaussian_pyramid()?;
         self.build_dog_pyramid()?;
 
-        println!("Kernels: {}", self.kernels.len());
-        println!("{:?}", self.images[2][0].dimensions());
-        println!("{:?}", &self.images[2][0].to_vec()[.. 100]);
-        println!("{:?}", &self.images[2][1].to_vec()[.. 100]);
-        println!("{:?}", &self.dogs[2][0].to_vec()[.. 100]);
+        // println!("Kernels: {}", self.kernels.len());
+        // println!("{:?}", self.images[2][0].dimensions());
+        // println!("{:?}", &self.images[2][0].to_vec());
+        // println!("{:?}", &self.images[2][1].to_vec());
+        // println!("{:?}", &self.dogs[2][0].to_vec());
         // self.dogs()?;
 
         let keypoints = self.scale_space_extrema()?;
         let desciptors = self.generate_descriptors(&keypoints[..])?;
         
-        println!("{:?} {}", keypoints.len(), desciptors.len());
 
         Ok(())
     }
@@ -104,7 +103,7 @@ impl Sift {
 
         self.img.clone()
             .resize(self.img.width() * 2, self.img.height() * 2)
-            .blur(sigma_diff)
+            // .blur(sigma_diff)
     }
 
     fn compute_octaves(&mut self) {
@@ -114,10 +113,12 @@ impl Sift {
     }
 
     fn build_gaussian_pyramid(&mut self) -> Result<()> {
+        let images_per_octave = self.kernels.len();
+
         let gaussian_images = RwLock::new(vec![
             vec![
                 ImageF32::new(0, 0);
-                self.kernels.len()
+                images_per_octave
             ];
             self.n_octaves as usize
         ]);
@@ -126,14 +127,24 @@ impl Sift {
         
         let mut img = self.sift_base_image(self.sigma, BLUR);
         for i in 0 .. self.n_octaves as usize {
+            println!("Octave: {i} Sigma: {} -------------------------", self.kernels[i]);
             {
                 let mut gi = gaussian_images.write();
                 gi[i][0] = img.clone();
+
+                for r in 2 .. 4 {
+                    for c in 4 .. 24.min(img.width() - 1) {
+                        println!("{c}-{r} {}", img.get_pixel(c, r).0[0]);
+                    }
+                }
+                
             }
+            println!("--------------------------------------");
             // octave_dims[i] = (img.width(), img.height());
 
-            self.kernels.par_iter().skip(1).enumerate().for_each(|(j, k)| {
-                let m = img.blur(*k);
+            self.kernels.iter().skip(1).enumerate().for_each(|(j, k)| {
+                // let m = img.blur(*k);
+                let m = img.clone();
                 let mut gi = gaussian_images.write();
                 gi[i][j + 1] = m;
             });
@@ -141,10 +152,16 @@ impl Sift {
             
             let tgimg = {
                 let read = gaussian_images.read();
-                read[i][self.kernels.len() - 1].clone()
+                read[i][images_per_octave - 3].clone()
             };
-            
-            img = tgimg.resize( tgimg.width() / 2, tgimg.height() / 2);
+            println!("{:?} INPUT ---------------------",( img.width() / 2, img.height() / 2));
+            for r in 2 .. 4 {
+                for c in 4 .. 24.min(tgimg.width() - 1) {
+                    println!("{c}-{r} {}", tgimg.get_pixel(c, r).0[0]);
+                }
+                tgimg.draw();
+            }
+            img = tgimg.resize( img.width() / 2, img.height() / 2);
         }
 
         self.images = gaussian_images.into_inner();

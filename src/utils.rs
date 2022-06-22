@@ -2,7 +2,8 @@
 
 use std::f32::consts::PI;
 
-use image::{ImageBuffer, Luma, Pixel};
+use anyhow::Result;
+use image::{ImageBuffer, Luma, Pixel, save_buffer_with_format};
 use rayon::iter::{IntoParallelRefMutIterator, IndexedParallelIterator, ParallelIterator};
 
 pub type ImageF32 = ImageBuffer<Luma<f32>, Vec<f32>>;
@@ -14,12 +15,12 @@ pub struct ImageOpsFilter<'a> {
 
 pub trait ImageOps {
     fn blur(&self, sigma: f32) -> ImageF32;
+    fn draw(&self, path: &str) -> Result<()>;
     fn resize(&self, new_width: u32, new_height: u32) -> ImageF32;
     fn subtract(&self, rhs: &ImageF32) -> ImageF32;
 
     fn horizontal_sample(&self, new_width: u32, s: &ImageOpsFilter) -> ImageF32;
     fn vertical_sample(&self, new_height: u32, s: &ImageOpsFilter) -> ImageF32;
-
 }
 
 impl ImageOps for ImageF32 {
@@ -40,6 +41,18 @@ impl ImageOps for ImageF32 {
         let out = self.vertical_sample(new_height, &f);
         
         out.horizontal_sample(new_width, &f)
+    }
+
+    fn draw(&self, path: &str) -> Result<()> {
+        save_buffer_with_format(
+            path,
+            self,
+            self.width() as u32,
+            self.height() as u32,
+            image::ColorType::L8,
+            image::ImageFormat::Png,
+        )?;
+        Ok(())
     }
 
     fn horizontal_sample(&self, new_width: u32, s: &ImageOpsFilter) -> ImageF32 {
