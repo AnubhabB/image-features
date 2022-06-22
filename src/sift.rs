@@ -85,6 +85,7 @@ impl Sift {
         self.build_dog_pyramid()?;
 
         println!("Kernels: {}", self.kernels.len());
+        println!("{:?}", self.images[2][0].dimensions());
         println!("{:?}", &self.images[2][0].to_vec()[.. 100]);
         println!("{:?}", &self.images[2][1].to_vec()[.. 100]);
         println!("{:?}", &self.dogs[2][0].to_vec()[.. 100]);
