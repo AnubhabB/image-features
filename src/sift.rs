@@ -11,20 +11,26 @@ use rayon::{iter::{IntoParallelRefMutIterator, IndexedParallelIterator, Parallel
 use crate::utils::{ImageF32, ImageOps};
 
 
+// assumed blur of the base image
 const BLUR: f32 = 0.5;
-const SIGMA: f32 = 1.6;
+// const SIGMA: f32 = 1.6;
 const INTERVAL: f32 = 3.;
-const CONTRAST_THESHOLD: f32 = 0.04; // from OpenCV implementation
-const EIGENVALUE_RATIO: f32 = 10.; // from OpenCV implementation default
+// const CONTRAST_THESHOLD: f32 = 0.04; // from OpenCV implementation
+// const EIGENVALUE_RATIO: f32 = 10.; // from OpenCV implementation default
 
 #[derive(Default)]
 pub struct Sift {
     img: ImageF32,
     viz: bool,
     dogs: Vec<Vec<ImageF32>>,
+    sigma: f32,
     images: Vec<Vec<ImageF32>>,
-    octaves: u32,
-    octave_dims: Vec<(u32, u32)>
+    layers: u32, // number of images in octave
+    kernels: Vec<f32>,
+    n_octaves: u32,
+    // octave_dims: Vec<(u32, u32)>,
+    edge_threshold: f32,
+    contrast_threshold: f32
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -57,6 +63,10 @@ impl Sift {
 
         Ok(Self {
             img,
+            sigma: 1.6,
+            layers: 3,
+            edge_threshold: 10.,
+            contrast_threshold: 0.04,
             ..Default::default()
         })
     }
@@ -68,10 +78,17 @@ impl Sift {
     /// Scale Invarient Feature Transform
     /// 
     pub fn generate(&mut self) -> Result<()> {
-        let gaussian_kernels = Self::gaussian_kernels(SIGMA, INTERVAL);
+
+        self.gaussian_kernels();
         self.compute_octaves();
-        self.generate_images(&gaussian_kernels[..])?;
-        self.dogs()?;
+        self.build_gaussian_pyramid()?;
+        self.build_dog_pyramid()?;
+
+        println!("Kernels: {}", self.kernels.len());
+        println!("{:?}", &self.images[2][0].to_vec()[.. 100]);
+        println!("{:?}", &self.images[2][1].to_vec()[.. 100]);
+        println!("{:?}", &self.dogs[2][0].to_vec()[.. 100]);
+        // self.dogs()?;
 
         let keypoints = self.scale_space_extrema()?;
         let desciptors = self.generate_descriptors(&keypoints[..])?;
@@ -82,7 +99,7 @@ impl Sift {
     }
 
     fn sift_base_image(&self, sigma: f32, b: f32) -> ImageF32 {
-        let sigma_diff = (sigma.powf(2.) - (2. * b).powf(2.)).sqrt();
+        let sigma_diff = (sigma.powf(2.) - (2. * b).powf(2.)).sqrt().max(0.01);
 
         self.img.clone()
             .resize(self.img.width() * 2, self.img.height() * 2)
@@ -91,35 +108,30 @@ impl Sift {
 
     fn compute_octaves(&mut self) {
         let dim = self.img.dimensions();
-        let min = if dim.0 < dim.1 {
-            dim.0 as f32
-        } else {
-            dim.1 as f32
-        } * 2.; // multiplying by this because the base image is going to change
-
-        self.octaves = ((min.log(E) / 2_f32.log(E)) - 1.).floor() as u32;
+        
+        self.n_octaves = ((((dim.0.min(dim.1) * 2) as f32).log(E) / 2_f32.log(E)).round() - 1.) as u32;
     }
 
-    fn generate_images(&mut self, kernels: &[f32]) -> Result<()> {
+    fn build_gaussian_pyramid(&mut self) -> Result<()> {
         let gaussian_images = RwLock::new(vec![
             vec![
                 ImageF32::new(0, 0);
-                kernels.len()
+                self.kernels.len()
             ];
-            self.octaves as usize
+            self.n_octaves as usize
         ]);
 
-        let mut octave_dims = vec![(0, 0); self.octaves as usize];
+        // let mut octave_dims = vec![(0, 0); self.octaves as usize];
         
-        let mut img = self.sift_base_image(SIGMA, BLUR);
-        for i in 0 .. self.octaves as usize {
+        let mut img = self.sift_base_image(self.sigma, BLUR);
+        for i in 0 .. self.n_octaves as usize {
             {
                 let mut gi = gaussian_images.write();
                 gi[i][0] = img.clone();
             }
-            octave_dims[i] = (img.width(), img.height());
+            // octave_dims[i] = (img.width(), img.height());
 
-            kernels.par_iter().skip(1).enumerate().for_each(|(j, k)| {
+            self.kernels.par_iter().skip(1).enumerate().for_each(|(j, k)| {
                 let m = img.blur(*k);
                 let mut gi = gaussian_images.write();
                 gi[i][j + 1] = m;
@@ -128,60 +140,46 @@ impl Sift {
             
             let tgimg = {
                 let read = gaussian_images.read();
-                read[i][kernels.len() - 3].clone()
+                read[i][self.kernels.len() - 1].clone()
             };
             
             img = tgimg.resize( tgimg.width() / 2, tgimg.height() / 2);
         }
 
         self.images = gaussian_images.into_inner();
-        self.octave_dims = octave_dims;
+        // self.octave_dims = octave_dims;
 
         Ok(())
     }
 
     // Difference-of-gradients
-    fn dogs(&mut self) -> Result<()> {
+    fn build_dog_pyramid(&mut self) -> Result<()> {
         let mut dogs = vec![
             vec![
                 ImageF32::new(0, 0);
                 self.images[0].len() - 1
             ];
-            self.octaves as usize
+            self.n_octaves as usize
         ];
         for (o, oct_img) in self.images.iter().enumerate() {
             for (i, (first, second)) in zip(oct_img, &oct_img[1..]).enumerate() {
-                // 
                 let sub = second.subtract(first);
-                // for r in 2 .. 4 {
-                //     for c in 10 .. 24 {
-                //         println!("{} {} {}", sub.get_pixel(c, r).0[0], second.get_pixel(c, r).0[0], first.get_pixel(c, r).0[0]);
-                //     }
-                // }
                 dogs[o][i] = sub;
             }
-
-            // let l = dogs[o].len();
-            // println!("{l}");
-            // for r in 2 .. 4 {
-            //     for c in 10 .. 24 {
-            //         println!("{}", dogs[o][0].get_pixel(c, r).0[0])
-            //     }
-            // }
         }
 
         self.dogs = dogs;
-
+        
         Ok(())
     }
 
     // Find pixel positions of all scale-space extrema in the image pyramid
     fn scale_space_extrema(&self) -> Result<Vec<KeyPoint>> {
-        let threshold = (0.5 * CONTRAST_THESHOLD / INTERVAL * 255.).floor(); // from OpenCV implementation
+        let threshold = (0.5 * self.contrast_threshold / INTERVAL * 255.).floor(); // from OpenCV implementation
         let mut keypoints = Vec::new();
 
         for (o, oct) in self.dogs.iter().enumerate() {
-            let (octw, octh) = self.octave_dims[o];
+            let (octw, octh) = (oct[0].width(), oct[0].height());
 
             for (img_idx, (img0, (img1, img2))) in zip(oct, zip(&oct[1..], &oct[2..])).enumerate() {
                 for r in 1 .. octh - 2 {
@@ -326,7 +324,7 @@ impl Sift {
 
         let val_at_extremum = pxstack[1].index((1, 1)) + 0.5 * grad.dot(&lstq);
         
-        if val_at_extremum.abs() * INTERVAL < CONTRAST_THESHOLD {
+        if val_at_extremum.abs() * INTERVAL < self.contrast_threshold {
             return None;
         }
 
@@ -335,7 +333,7 @@ impl Sift {
         let xy_hess_trace = xy_hess.trace();
         let xy_hess_det = xy_hess.determinant();
         
-        if xy_hess_det <= 0. || EIGENVALUE_RATIO * xy_hess_trace.powf(2.) >= (EIGENVALUE_RATIO + 1.).powf(2.) * xy_hess_det {
+        if xy_hess_det <= 0. || self.edge_threshold * xy_hess_trace.powf(2.) >= (self.edge_threshold + 1.).powf(2.) * xy_hess_det {
             return None;
         }
         
@@ -345,33 +343,30 @@ impl Sift {
                 (r as f32 + lstq[1]) * 2_f32.powf(octave_idx as f32)
             ),
             oct: octave_idx + imidx * 2_u32.pow(8) as usize + (((lstq[2] + 0.5) * 255.).round() * 2_f32.powf(16.)) as usize,
-            size: SIGMA * 2_f32.powf((imidx as f32 + lstq[2]) / INTERVAL) * 2_f32.powf(octave_idx as f32 + 1.),
+            size: self.sigma * 2_f32.powf((imidx as f32 + lstq[2]) / INTERVAL) * 2_f32.powf(octave_idx as f32 + 1.),
             res: val_at_extremum.abs(),
             angle: 0.
         }, imidx))
         // None
     }
 
-    fn gaussian_kernels(sigma: f32, intervals: f32) -> Vec<f32> {
-        let img_per_octave = intervals + 3.;
-        let b: f32 = 2.;
+    fn gaussian_kernels(&mut self) {
+        self.layers = (INTERVAL + 3.) as u32;
 
-        let k = b.powf(1./ intervals);
+        let k = 2_f32.powf(1./ INTERVAL as f32);
 
-        let mut gk = vec![0.; img_per_octave as usize];
-        gk[0] = sigma;
+        self.kernels = vec![0.;self.layers as usize];
+        self.kernels[0] = self.sigma;
 
-        gk.par_iter_mut()
+        self.kernels.par_iter_mut()
             .enumerate()
             .skip(1)
             .for_each(|(i, u)| {
-                let prev = k.powf(i as f32 - 1.) * sigma;
+                let prev = k.powf(i as f32 - 1.) * self.sigma;
                 let total = k * prev;
 
                 *u = (total.powf(2.) - prev.powf(2.)).sqrt();
             });
-
-        gk
     }
 
     fn is_pixel_extremum(im0: Matrix3<f32>, im1: Matrix3<f32>, im2: Matrix3<f32>, threshold: f32) -> bool {
@@ -586,7 +581,7 @@ impl Sift {
         const DESCRIPTOR_MAX_VAL: f32 = 0.2;
 
         let imgs = &self.images[..];
-        let octlen = self.octaves as i32;
+        let octlen = self.n_octaves as i32;
         let bins_per_deg = NUM_BINS/ 360.;
 
         let mut descriptors = vec![vec![0]];
@@ -604,7 +599,7 @@ impl Sift {
             }
             
             let img = &imgs[octave as usize + 1][layer];
-            let (num_c, num_r) = self.octave_dims[octave as usize + 1];
+            let (num_c, num_r) = (self.dogs[octave as usize + 1][0].width(), self.dogs[octave as usize + 1][0].height());
 
             let point = ((k.pcr.0 as f32 * scale).round() as usize, (k.pcr.1 as f32 * scale).round() as usize);
             let angle = 360. - k.angle;
@@ -794,7 +789,7 @@ mod tests {
 
     #[test]
     fn sift() -> Result<()> {
-        let mut im = Sift::new("data/1_small.png")?;
+        let mut im = Sift::new("data/1_mini.png")?;
         // im.visualize();
         
         im.generate()?;
