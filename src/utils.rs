@@ -3,8 +3,7 @@
 use std::f32::consts::PI;
 
 use image::{ImageBuffer, Luma, Pixel};
-use parking_lot::RwLock;
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, IndexedParallelIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefMutIterator, IndexedParallelIterator, ParallelIterator};
 
 pub type ImageF32 = ImageBuffer<Luma<f32>, Vec<f32>>;
 
