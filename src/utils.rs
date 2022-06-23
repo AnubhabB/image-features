@@ -19,34 +19,37 @@ pub trait ImageOps {
     fn resize(&self, new_width: u32, new_height: u32) -> ImageF32;
     fn subtract(&self, rhs: &ImageF32) -> ImageF32;
 
-    fn horizontal_sample(&self, new_width: u32, s: &ImageOpsFilter) -> ImageF32;
-    fn vertical_sample(&self, new_height: u32, s: &ImageOpsFilter) -> ImageF32;
+    fn horizontal_sample(&self, new_width: u32, s: &mut ImageOpsFilter) -> ImageF32;
+    fn vertical_sample(&self, new_height: u32, s: &mut ImageOpsFilter) -> ImageF32;
 }
 
 impl ImageOps for ImageF32 {
     fn blur(&self, sigma: f32) -> ImageF32 {
-        let f = ImageOpsFilter {
+        let sigma = if sigma <= 0.0 { 1.0 } else { sigma };
+
+        let mut f = ImageOpsFilter {
             kernel: Box::new(|x| gaussian(x, sigma)),
             support: 2. * sigma,
         };
         
-        let out = self.vertical_sample(self.height(), &f);
+        let out = self.vertical_sample(self.height(), &mut f);
 
-        out.horizontal_sample(self.width(), &f)
+        out.horizontal_sample(self.width(), &mut f)
     }
 
     fn resize(&self, new_width: u32, new_height: u32) -> ImageF32 {
-        let f = ImageOpsFilter { kernel: Box::new(|_| 1.), support: 0. };
+        let mut f = ImageOpsFilter { kernel: Box::new(|_| 1.), support: 0. };
 
-        let out = self.vertical_sample(new_height, &f);
+        let out = self.vertical_sample(new_height, &mut f);
         
-        out.horizontal_sample(new_width, &f)
+        out.horizontal_sample(new_width, &mut f)
     }
 
     fn draw(&self, path: &str) -> Result<()> {
+        let p: Vec<u8> = self.to_vec().iter().map(|p| p.round() as u8).collect();
         save_buffer_with_format(
             path,
-            self,
+            &p[..],
             self.width() as u32,
             self.height() as u32,
             image::ColorType::L8,
@@ -55,7 +58,7 @@ impl ImageOps for ImageF32 {
         Ok(())
     }
 
-    fn horizontal_sample(&self, new_width: u32, s: &ImageOpsFilter) -> ImageF32 {
+    fn horizontal_sample(&self, new_width: u32, s: &mut ImageOpsFilter) -> ImageF32 {
         let (width, height) = self.dimensions();
         let mut out = ImageF32::new(new_width, height);
         let mut ws = Vec::new();
@@ -109,7 +112,7 @@ impl ImageOps for ImageF32 {
         out
     }
 
-    fn vertical_sample(&self, new_height: u32, s: &ImageOpsFilter) -> ImageF32 {
+    fn vertical_sample(&self, new_height: u32, s: &mut ImageOpsFilter) -> ImageF32 {
         let (width, height) = self.dimensions();
         let mut out = ImageF32::new(width, new_height);
         let mut ws = Vec::new();

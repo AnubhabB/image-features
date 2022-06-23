@@ -2,11 +2,12 @@ use std::f32::{consts::E, EPSILON};
 use std::iter::zip;
 use std::ops::{Div, Index, Mul};
 
+// use image::imageops::blur;
 use image::{GenericImageView, Luma};
 use anyhow::{Result};
 use nalgebra::{OMatrix, U3, U1, Matrix3, Vector3, OVector, Dynamic};
 use parking_lot::RwLock;
-use rayon::{iter::{IntoParallelRefMutIterator, IndexedParallelIterator, ParallelIterator, IntoParallelRefIterator}};
+use rayon::{iter::{IntoParallelRefMutIterator, IndexedParallelIterator, ParallelIterator}};
 
 use crate::utils::{ImageF32, ImageOps};
 
@@ -51,8 +52,8 @@ impl Sift {
         let mut img = ImageF32::new(dim.0, dim.1);
 
         // the default greyscale implementation of 
-        for c in 0 .. dim.0 - 1 {
-            for r in 0 .. dim.1 - 1 {
+        for c in 0 .. dim.0 {
+            for r in 0 .. dim.1 {
                 let px = opn.get_pixel(c, r).0;
                 let g = (0.299 * px[0] as f32) + (0.587 * px[1] as f32) + (0.114 * px[2] as f32);
                 // img.put_pixel(c, r, Rgba([g, g, g, 255]));  
@@ -61,9 +62,11 @@ impl Sift {
             }
         }
 
+        img.draw("data/sift/base-r.png")?;
+
         Ok(Self {
             img,
-            sigma: 1.6,
+            sigma: 3.5,
             layers: 3,
             edge_threshold: 10.,
             contrast_threshold: 0.04,
@@ -92,18 +95,19 @@ impl Sift {
         // self.dogs()?;
 
         let keypoints = self.scale_space_extrema()?;
+        println!("{}",keypoints.len());
         let desciptors = self.generate_descriptors(&keypoints[..])?;
-        
+        println!("{}",desciptors.len());
 
         Ok(())
     }
 
     fn sift_base_image(&self, sigma: f32, b: f32) -> ImageF32 {
-        let sigma_diff = (sigma.powf(2.) - (2. * b).powf(2.)).sqrt().max(0.01);
-
+        let sigma_diff = (sigma.powi(2) - (2. * b).powi(2)).max(0.01).sqrt();
+        println!("{sigma_diff}");
         self.img.clone()
             .resize(self.img.width() * 2, self.img.height() * 2)
-            // .blur(sigma_diff)
+            .blur(sigma_diff)
     }
 
     fn compute_octaves(&mut self) {
@@ -127,7 +131,7 @@ impl Sift {
         
         let mut img = self.sift_base_image(self.sigma, BLUR);
         for i in 0 .. self.n_octaves as usize {
-            println!("Octave: {i} Sigma: {} -------------------------", self.kernels[i]);
+            println!("Octave: {i} -- dim: {} {}", &img.width(), &img.height());
             {
                 let mut gi = gaussian_images.write();
                 gi[i][0] = img.clone();
@@ -143,8 +147,8 @@ impl Sift {
             // octave_dims[i] = (img.width(), img.height());
 
             self.kernels.iter().skip(1).enumerate().for_each(|(j, k)| {
-                // let m = img.blur(*k);
-                let m = img.clone();
+                let m = img.blur(*k);
+                // let m = img.clone();
                 let mut gi = gaussian_images.write();
                 gi[i][j + 1] = m;
             });
@@ -159,8 +163,8 @@ impl Sift {
                 for c in 4 .. 24.min(tgimg.width() - 1) {
                     println!("{c}-{r} {}", tgimg.get_pixel(c, r).0[0]);
                 }
-                tgimg.draw();
             }
+            tgimg.draw(format!("data/sift/img-rsift-{}.png",i).as_str())?;
             img = tgimg.resize( img.width() / 2, img.height() / 2);
         }
 
@@ -726,7 +730,7 @@ impl Sift {
             }
 
             let mut descriptor_vec = vec![0.];
-            let mut desc_sum = 0.;
+            // let mut desc_sum = 0.;
             for (i, j) in hist_tensor.iter().enumerate() {
                 if i == 0 || i == hist_tensor.len() - 1 {
                     continue;
@@ -739,14 +743,14 @@ impl Sift {
 
                     for p in l.iter() {
                         descriptor_vec.push(*p);
-                        desc_sum += *p;
+                        // desc_sum += *p;
                     }
                 }
             }
 
-            if desc_sum == 0. {
-                return;
-            }
+            // if desc_sum == 0. {
+            //     return;
+            // }
             let mut ov = OVector::<f32, Dynamic>::from_vec(descriptor_vec);
             let desc_norm = ov.norm();
             let threshold = desc_norm * DESCRIPTOR_MAX_VAL;
@@ -807,7 +811,7 @@ mod tests {
 
     #[test]
     fn sift() -> Result<()> {
-        let mut im = Sift::new("data/1_mini.png")?;
+        let mut im = Sift::new("data/1_small.png")?;
         // im.visualize();
         
         im.generate()?;
@@ -826,6 +830,20 @@ mod tests {
 
     //     Ok(())
     // }
+
+    #[test]
+    fn blur_img() -> Result<()> {
+        let im = image::open("data/1_small.png")?.grayscale();
+        
+        // let k = resize(&im, im.width() / 2, im.height() / 2, image::imageops::FilterType::Nearest);
+
+        // let _im = Sift::new("data/1_mini.png")?;
+        // let l = resize(&_im.img, _im.img.width()/ 2, _im.img.height() / 2, image::imageops::FilterType::Nearest);
+
+        Ok(())
+    }
+
+
 
     // #[test]
     // fn lstsq() -> Result<()> {
