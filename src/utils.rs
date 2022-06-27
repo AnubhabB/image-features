@@ -3,8 +3,8 @@
 use std::f32::consts::PI;
 
 use anyhow::Result;
-use image::{ImageBuffer, Luma, Pixel, save_buffer_with_format};
-use rayon::iter::{IntoParallelRefMutIterator, IndexedParallelIterator, ParallelIterator};
+use image::{save_buffer_with_format, ImageBuffer, Luma, Pixel};
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
 pub type ImageF32 = ImageBuffer<Luma<f32>, Vec<f32>>;
 
@@ -31,17 +31,20 @@ impl ImageOps for ImageF32 {
             kernel: Box::new(|x| gaussian(x, sigma)),
             support: 2. * sigma,
         };
-        
+
         let out = self.vertical_sample(self.height(), &mut f);
 
         out.horizontal_sample(self.width(), &mut f)
     }
 
     fn resize(&self, new_width: u32, new_height: u32) -> ImageF32 {
-        let mut f = ImageOpsFilter { kernel: Box::new(|_| 1.), support: 0. };
+        let mut f = ImageOpsFilter {
+            kernel: Box::new(|_| 1.),
+            support: 0.,
+        };
 
         let out = self.vertical_sample(new_height, &mut f);
-        
+
         out.horizontal_sample(new_width, &mut f)
     }
 
@@ -64,15 +67,11 @@ impl ImageOps for ImageF32 {
         let mut ws = Vec::new();
 
         let ratio = width as f32 / new_width as f32;
-        let sratio = if ratio < 1. {
-            1.
-        } else {
-            ratio
-        };
+        let sratio = if ratio < 1. { 1. } else { ratio };
 
         let src_support = s.support * sratio;
 
-        for outx in 0 .. new_width {
+        for outx in 0..new_width {
             let inputx = (outx as f32 + 0.5) * ratio;
 
             let left = (inputx - src_support).floor() as i64;
@@ -98,13 +97,13 @@ impl ImageOps for ImageF32 {
 
             for y in 0..height {
                 let mut t = [0.];
-    
+
                 for (i, w) in ws.iter().enumerate() {
                     let p = self.get_pixel(left + i as u32, y).channels();
-    
+
                     t[0] += p[0] * w;
                 }
-    
+
                 out.put_pixel(outx, y, Luma::<f32>::from(t));
             }
         }
@@ -118,14 +117,10 @@ impl ImageOps for ImageF32 {
         let mut ws = Vec::new();
 
         let ratio = height as f32 / new_height as f32;
-        let sratio = if ratio < 1. {
-            1.
-        } else {
-            ratio
-        };
+        let sratio = if ratio < 1. { 1. } else { ratio };
         let src_support = s.support * sratio;
 
-        for outy in 0 .. new_height {
+        for outy in 0..new_height {
             let inputy = (outy as f32 + 0.5) * ratio;
             let left = (inputy - src_support).floor() as i64;
             let left = clamp(left, 0, <i64 as From<_>>::from(height) - 1) as u32;
@@ -150,10 +145,10 @@ impl ImageOps for ImageF32 {
 
             for x in 0..width {
                 let mut t = [0.];
-    
+
                 for (i, w) in ws.iter().enumerate() {
                     let p = self.get_pixel(x, left + i as u32).channels();
-    
+
                     // #[allow(deprecated)]
                     // let (k1, k2, k3, k4) = p.channels4();
                     // let vec: (f32, f32, f32, f32) = (
@@ -162,14 +157,14 @@ impl ImageOps for ImageF32 {
                     //     NumCast::from(k3).unwrap(),
                     //     NumCast::from(k4).unwrap(),
                     // );
-    
+
                     t[0] += p[0] * w;
                 }
-    
+
                 // #[allow(deprecated)]
                 // This is not necessarily Rgba.
                 // let t = Pixel::from_channels(t.0, t.1, t.2, t.3);
-    
+
                 out.put_pixel(x, outy, Luma::<f32>::from(t));
             }
         }
@@ -180,10 +175,7 @@ impl ImageOps for ImageF32 {
     fn subtract(&self, other: &ImageF32) -> ImageF32 {
         let mut img = ImageF32::new(self.width(), self.height());
 
-        img
-        .par_iter_mut()
-        .enumerate()
-        .for_each(|(i, p)| {
+        img.par_iter_mut().enumerate().for_each(|(i, p)| {
             *p = self.get(i).unwrap() - other.get(i).unwrap();
         });
 
@@ -197,7 +189,6 @@ impl ImageOps for ImageF32 {
 
 //     // horizontal_sample_blur_f32(&out, sigma)
 // }
-
 
 // Sample the columns of the supplied image using the provided filter.
 // The width of the image remains unchanged.
@@ -387,7 +378,7 @@ impl ImageOps for ImageF32 {
 //                 // let mut k = t.write();
 //                 t[0] += p[0] * w;
 //             });
-            
+
 //             // let t = t.into_inner();
 //             out.put_pixel(outx, y, Luma(t));
 //         }
@@ -419,19 +410,18 @@ mod tests {
 
     // #[test]
     // fn blur() -> Result<()> {
-        // let im = image::open("data/1_small.png").unwrap();
-        // let dim = im.dimensions();
-        // let im = im.grayscale().resize((dim.0 * 2) as u32, (dim.1 * 2) as u32, imageops ::FilterType::Nearest);
+    // let im = image::open("data/1_small.png").unwrap();
+    // let dim = im.dimensions();
+    // let im = im.grayscale().resize((dim.0 * 2) as u32, (dim.1 * 2) as u32, imageops ::FilterType::Nearest);
 
+    // let sigma = 1.6_f32.powf(2.) - (2. * 0.5_f32).powf(2.).sqrt();
 
-        // let sigma = 1.6_f32.powf(2.) - (2. * 0.5_f32).powf(2.).sqrt();
+    // let im1 = blur_f32(&im.to_luma32f(), sigma);
+    // let im2 = im.blur(sigma).to_luma8();
 
-        // let im1 = blur_f32(&im.to_luma32f(), sigma);
-        // let im2 = im.blur(sigma).to_luma8();
+    // println!("{:?}", &im1.to_vec()[0..1000]);
+    // println!("{:?}", &im2.to_vec()[0..1000]);
 
-        // println!("{:?}", &im1.to_vec()[0..1000]);
-        // println!("{:?}", &im2.to_vec()[0..1000]);
-        
     //     Ok(())
     // }
 
@@ -442,14 +432,14 @@ mod tests {
 
     //     let hess = OMatrix::<f32, U3, U3>::from_row_slice(&[
     //         -1.0, 0.0, 0.0,
-    //         0.0, 0.0, 0.25, 
+    //         0.0, 0.0, 0.25,
     //         0.0, 0.25, 0.0
     //     ]);
-        
+
     //     let grad = OVector::<f32, U3>::from_row_slice(&[0.5, 0.0, 0.0]);
 
     //     let lst = -(lstsq::lstsq(&hess, &grad, EPSILON).unwrap().solution);
-        
+
     //     println!("{:?}", &lst);
     //     Ok(())
     // }

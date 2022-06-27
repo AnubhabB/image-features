@@ -1,17 +1,15 @@
-use std::{sync::{Arc}};
 use anyhow::Result;
 use image::{save_buffer_with_format, ColorType, DynamicImage, GenericImageView};
 use parking_lot::RwLock;
 use rayon::{prelude::*, scope};
-
+use std::sync::Arc;
 
 pub struct Image {
     w: usize,
     h: usize,
     img: DynamicImage,
-    viz: bool
+    viz: bool,
 }
-
 
 impl Image {
     pub fn new(input_path: &str) -> Result<Image> {
@@ -22,7 +20,7 @@ impl Image {
             w: img.width() as usize,
             h: img.height() as usize,
             img,
-            viz: false
+            viz: false,
         })
     }
 
@@ -124,7 +122,7 @@ impl Image {
         let widtoparse = self.w - 1;
 
         let mut d = vec![0; len];
-        
+
         d.par_iter_mut()
             .skip(self.w) // skip first row
             .take(len - (self.w * 2)) // skip last row
@@ -174,12 +172,12 @@ impl Image {
     /// 56,57,58,59,60,61,62,63
     /// ]
     pub fn hog(&self) -> Result<Vec<f32>> {
-        let hists = Arc::new(RwLock::new(vec![vec![0.; 9]; self.w/8 * self.h/8]));
+        let hists = Arc::new(RwLock::new(vec![vec![0.; 9]; self.w / 8 * self.h / 8]));
         let num_blocks_per_row = self.w / 8;
 
         scope(|s| {
-            for y in 1 .. self.h - 1 {
-                for x in 1 .. self.w - 1 {
+            for y in 1..self.h - 1 {
+                for x in 1..self.w - 1 {
                     let hists = hists.clone();
 
                     s.spawn(move |_| {
@@ -188,21 +186,21 @@ impl Image {
                         } else {
                             (0., 0.)
                         };
-    
-                        let block_row = y/ 8;
-                        let block_col = x/ 8;
+
+                        let block_row = y / 8;
+                        let block_col = x / 8;
                         let block_idx = (block_row * num_blocks_per_row) + block_col;
-    
-                        let bin = (dir/20.).floor();
-                        let j_val = (((bin + 1.) * 20. - dir)/ 20.) * mag;
-    
+
+                        let bin = (dir / 20.).floor();
+                        let j_val = (((bin + 1.) * 20. - dir) / 20.) * mag;
+
                         let j_1_val = mag - j_val;
                         let j_1_bin = if j_val > 0. && dir < 160. {
-                                bin + 1.
+                            bin + 1.
                         } else {
                             0.
                         };
-    
+
                         {
                             let mut hist = hists.write();
                             if let Some(h) = hist.get_mut(block_idx) {
@@ -219,8 +217,8 @@ impl Image {
 
         let mut feature_vec = Vec::new();
 
-        for y in 0 .. self.h/8 {
-            for x in 0 .. self.w/8 {
+        for y in 0..self.h / 8 {
+            for x in 0..self.w / 8 {
                 let elm = RwLock::new(0.);
                 let tvc = RwLock::new(vec![0.; 36]);
 
@@ -258,7 +256,6 @@ impl Image {
                                     let mut w = tvc.write();
                                     w[(ROOT * 9) + i] = *d;
                                 }
-                                
                             });
                         }
                     });
@@ -306,7 +303,7 @@ impl Image {
 
                     l.par_iter_mut().for_each(|d| {
                         let r = *d;
-                        *d = r/ elm;
+                        *d = r / elm;
                     });
                 }
                 let mut f = tvc.into_inner();
@@ -335,7 +332,6 @@ impl Image {
                 // r_mag = (r_gx.powf(2.) + r_gy.powf(2.)).sqrt();
                 let mut l = mag.write();
                 l[0] = (r_gx, r_gy, (r_gx.powf(2.) + r_gy.powf(2.)).sqrt());
-
             });
 
             // calc for g channel
@@ -366,18 +362,17 @@ impl Image {
             let l = mag.read();
 
             let d = if l[2].0 > 0. {
-                (l[2].1/l[2].0).atan().to_degrees().abs()
+                (l[2].1 / l[2].0).atan().to_degrees().abs()
             } else {
                 0.
             };
 
             (l[2].2, d)
         };
-        
+
         Ok((m, d))
     }
 
-    
     fn to_grey(&self) -> DynamicImage {
         self.img.grayscale()
     }
@@ -404,14 +399,13 @@ impl Image {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     // use std::f32::EPSILON;
 
     use super::Image;
 
-    use anyhow::{Result, Ok};
+    use anyhow::{Ok, Result};
 
     #[test]
     fn hod() -> Result<()> {
@@ -438,14 +432,14 @@ mod tests {
 
     //     let hess = OMatrix::<f32, U3, U3>::from_row_slice(&[
     //         -1.0, 0.0, 0.0,
-    //         0.0, 0.0, 0.25, 
+    //         0.0, 0.0, 0.25,
     //         0.0, 0.25, 0.0
     //     ]);
-        
+
     //     let grad = OVector::<f32, U3>::from_row_slice(&[0.5, 0.0, 0.0]);
 
     //     let lst = -(lstsq::lstsq(&hess, &grad, EPSILON).unwrap().solution);
-        
+
     //     println!("{:?}", &lst);
     //     Ok(())
     // }

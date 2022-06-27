@@ -14,10 +14,7 @@ use crate::utils::{ImageF32, ImageOps};
 
 // assumed blur of the base image
 const BLUR: f32 = 0.5;
-// const SIGMA: f32 = 1.6;
 const INTERVAL: f32 = 3.;
-// const CONTRAST_THESHOLD: f32 = 0.04; // from OpenCV implementation
-// const EIGENVALUE_RATIO: f32 = 10.; // from OpenCV implementation default
 
 #[derive(Default)]
 pub struct Sift {
@@ -29,9 +26,10 @@ pub struct Sift {
     layers: u32, // number of images in octave
     kernels: Vec<f32>,
     n_octaves: u32,
-    // octave_dims: Vec<(u32, u32)>,
+    img_border: u32,
     edge_threshold: f32,
-    contrast_threshold: f32
+    contrast_threshold: f32,
+    generated_gauss: bool
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -66,8 +64,9 @@ impl Sift {
 
         Ok(Self {
             img,
-            sigma: 3.5,
+            sigma: 1.6,
             layers: 3,
+            img_border: 5,
             edge_threshold: 10.,
             contrast_threshold: 0.04,
             ..Default::default()
@@ -84,7 +83,12 @@ impl Sift {
 
         self.gaussian_kernels();
         self.compute_octaves();
-        self.build_gaussian_pyramid()?;
+        if !self.generated_gauss {
+            self.load_gaussian_pyramid()?;
+        } else {
+            self.build_gaussian_pyramid()?;
+        }
+        
         self.build_dog_pyramid()?;
 
         // println!("Kernels: {}", self.kernels.len());
@@ -104,7 +108,7 @@ impl Sift {
 
     fn sift_base_image(&self, sigma: f32, b: f32) -> ImageF32 {
         let sigma_diff = (sigma.powi(2) - (2. * b).powi(2)).max(0.01).sqrt();
-        println!("{sigma_diff}");
+
         self.img.clone()
             .resize(self.img.width() * 2, self.img.height() * 2)
             .blur(sigma_diff)
@@ -131,26 +135,26 @@ impl Sift {
         
         let mut img = self.sift_base_image(self.sigma, BLUR);
         for i in 0 .. self.n_octaves as usize {
-            println!("Octave: {i} -- dim: {} {}", &img.width(), &img.height());
             {
                 let mut gi = gaussian_images.write();
                 gi[i][0] = img.clone();
-
-                for r in 2 .. 4 {
-                    for c in 4 .. 24.min(img.width() - 1) {
-                        println!("{c}-{r} {}", img.get_pixel(c, r).0[0]);
-                    }
+                if i == 0 || i == 1 {
+                    img.draw(format!("data/sift/{i}/img-r-0.png").as_str())?;
                 }
-                
+                // for r in 2 .. 4 {
+                //     for c in 4 .. 24.min(img.width() - 1) {
+                //         println!("{c}-{r} {}", img.get_pixel(c, r).0[0]);
+                //     }
+                // }
             }
-            println!("--------------------------------------");
-            // octave_dims[i] = (img.width(), img.height());
 
             self.kernels.iter().skip(1).enumerate().for_each(|(j, k)| {
-                let m = img.blur(*k);
-                // let m = img.clone();
+                img = img.blur(*k);
+                if i == 0 || i == 1 {
+                    img.draw(format!("data/sift/{i}/img-r-{}.png", j + 1).as_str()).unwrap()
+                }
                 let mut gi = gaussian_images.write();
-                gi[i][j + 1] = m;
+                gi[i][j + 1] = img.clone();
             });
             
             
@@ -158,13 +162,12 @@ impl Sift {
                 let read = gaussian_images.read();
                 read[i][images_per_octave - 3].clone()
             };
-            println!("{:?} INPUT ---------------------",( img.width() / 2, img.height() / 2));
-            for r in 2 .. 4 {
-                for c in 4 .. 24.min(tgimg.width() - 1) {
-                    println!("{c}-{r} {}", tgimg.get_pixel(c, r).0[0]);
-                }
-            }
-            tgimg.draw(format!("data/sift/img-rsift-{}.png",i).as_str())?;
+
+            // for r in 2 .. 4 {
+            //     for c in 4 .. 24.min(tgimg.width() - 1) {
+            //         println!("{c}-{r} {}", tgimg.get_pixel(c, r).0[0]);
+            //     }
+            // }
             img = tgimg.resize( img.width() / 2, img.height() / 2);
         }
 
@@ -187,6 +190,16 @@ impl Sift {
             for (i, (first, second)) in zip(oct_img, &oct_img[1..]).enumerate() {
                 let sub = second.subtract(first);
                 dogs[o][i] = sub;
+
+                if o == 0 || o == 1 {
+                    // for r in 2 .. 4 {
+                    //     for c in 4 .. 24.min(dogs[o][i].width() - 1) {
+                    //         println!("{c}-{r} {}", dogs[o][i].get_pixel(c, r).0[0]);
+                    //     }
+                    // }
+
+                    dogs[o][i].draw(format!("data/sift/{o}/dog-r-{i}.png").as_str())?;
+                }
             }
         }
 
@@ -204,34 +217,46 @@ impl Sift {
             let (octw, octh) = (oct[0].width(), oct[0].height());
 
             for (img_idx, (img0, (img1, img2))) in zip(oct, zip(&oct[1..], &oct[2..])).enumerate() {
-                for r in 1 .. octh - 2 {
-                    for c in 1 .. octw - 2 {
-                        let m0 = Matrix3::from_column_slice(&[
-                            img0.index((c - 1, r - 1)).0[0], img0.index((c, r - 1)).0[0], img0.index((c + 1, r - 1)).0[0],
-                            img0.index((c - 1, r)).0[0], img0.index((c, r)).0[0], img0.index((c + 1, r)).0[0],
-                            img0.index((c - 1, r + 1)).0[0], img0.index((c, r + 1)).0[0], img0.index((c + 1, r + 1)).0[0],
-                        ]);
-                        let m1 = Matrix3::from_column_slice(&[
-                            img1.index((c - 1, r - 1)).0[0], img1.index((c, r - 1)).0[0], img1.index((c + 1, r - 1)).0[0],
-                            img1.index((c - 1, r)).0[0], img1.index((c, r)).0[0], img1.index((c + 1, r)).0[0],
-                            img1.index((c - 1, r + 1)).0[0], img1.index((c, r + 1)).0[0], img1.index((c + 1, r + 1)).0[0],
-                        ]);
-                        let m2 = Matrix3::from_column_slice(&[
-                            img2.index((c - 1, r - 1)).0[0], img2.index((c, r - 1)).0[0], img2.index((c + 1, r - 1)).0[0],
-                            img2.index((c - 1, r)).0[0], img2.index((c, r)).0[0], img2.index((c + 1, r)).0[0],
-                            img2.index((c - 1, r + 1)).0[0], img2.index((c, r + 1)).0[0], img2.index((c + 1, r + 1)).0[0],
-                        ]);
-                        
-                        if !Self::is_pixel_extremum(m0, m1, m2, threshold) {
+                for r in 1 .. octh - self.img_border {
+                    for c in 1 .. octw - self.img_border {
+                        if img1.get_pixel(c, r).0[0].abs() <= threshold {
                             continue;
                         }
 
-                        if let Some((kp, imidx)) = self.localize_extremum(img_idx + 1, o, (c, r), octw, octh) {
+                        let px_cube = Self::pixel_cube(c, r, img0, img1, img2);
+                        
+
+                        if !Self::is_pixel_extremum(&px_cube) {
+                            continue;
+                        }
+
+                        // if o == 0 {
+                        //     flen += 1;
+                        //     println!("found: {o} {c} {r} {}", m1.index((1, 1)));
+                        //     println!("{:?}", m0);
+                        //     println!("{:?}", m1);
+                        //     println!("{:?}", m2);
+                        // }
+
+                        // if let Some((kp, imidx)) = self.localize_extremum(img_idx + 1, o, (c, r), octw, octh) {
+                        //     let mut kp_o = self.compute_keypoint_orientation(&kp, o, octw, octh, imidx);
+                        //     if kp_o.is_empty() {
+                        //         continue;
+                        //     }
+
+                        //     keypoints.append(&mut kp_o);
+                        // }
+                        if let Some((kp, imidx)) = self.localize_extremum(&px_cube, img_idx + 1, o, (c, r), octw, octh) {
+                            
                             let mut kp_o = self.compute_keypoint_orientation(&kp, o, octw, octh, imidx);
                             if kp_o.is_empty() {
                                 continue;
                             }
-
+                            // if o == 0 {
+                            //     println!("{:?} {} {} {}", kp.pcr, kp.res, kp.size, imidx);
+                            //     println!("{:?}", kp_o);
+                            // }
+                            
                             keypoints.append(&mut kp_o);
                         }
                     }
@@ -242,11 +267,11 @@ impl Sift {
         // Sort keypoints and remove duplicates if any
         {
             keypoints.sort_unstable_by(|k1, k2| {
-                if k1.pcr.0 != k2.pcr.0 && let Some(c) = k1.pcr.0.partial_cmp(&k2.pcr.1) {
+                if k1.pcr.0 != k2.pcr.0 && let Some(c) = k1.pcr.0.partial_cmp(&k2.pcr.0) {
                     return c;
                 }
     
-                if k1.pcr.1 != k2.pcr.1 && let Some(c) = k2.pcr.1.partial_cmp(&k2.pcr.1) {
+                if k1.pcr.1 != k2.pcr.1 && let Some(c) = k1.pcr.1.partial_cmp(&k2.pcr.1) {
                     return c;
                 }
     
@@ -264,68 +289,45 @@ impl Sift {
     
                 k1.oct.cmp(&k2.oct)
             });
-            keypoints.dedup();
+
+            keypoints.dedup_by(|a, b| a.pcr == b.pcr && a.size == b.size && a.angle == b.angle);
 
             // rescaling keypoints as per https://medium.com/@russmislam/implementing-sift-in-python-a-complete-guide-part-2-c4350274be2b
             // not sure of the `WHY` for the octave though
             keypoints.iter_mut()
             .for_each(|k| {
-                k.pcr = (k.pcr.0/ 2., k.pcr.1/2.);
+                // println!("{:?}", k.pcr);
+                k.pcr = (0.5 * k.pcr.0, 0.5 * k.pcr.1);
                 k.size *= 0.5;
                 k.oct = (k.oct & !255) | ((k.oct - 1) & 255);
+
+                // println!("{:?}", k);
             });
         }
 
-
-        // let kp = keypoints.read().clone();
-
-        // Ok(kp)
         Ok(keypoints)
     }
 
-    fn localize_extremum(&self, im1_idx: usize, octave_idx: usize, px_idx: (u32, u32), oct_w: u32, oct_h: u32) -> Option<(KeyPoint, usize)> {
-        let divisor: f32 = 255.;
+    fn localize_extremum(&self, px_cube: &[Matrix3<f32>; 3],idx: usize, octave_idx: usize, dim: (u32, u32), oct_w: u32, oct_h: u32) -> Option<(KeyPoint, usize)> {
+        // let divisor: f32 = 255.;
         let mut converge = false;
 
-        let mut c = px_idx.0;
-        let mut r = px_idx.1;
-        let mut imidx = im1_idx;
+        let mut c = dim.0;
+        let mut r = dim.1;
+        let mut imidx = idx;
 
         let mut grad: Vector3<f32> = Vector3::default();
         let mut hess: Matrix3<f32> = Matrix3::default();
         let mut lstq: OMatrix<f32, U3, U1> = OMatrix::default();
 
-        let mut pxstack: [Matrix3<f32>; 3] = [Matrix3::<f32>::default(); 3];
+        let mut pxstack: [Matrix3<f32>; 3] = px_cube.to_owned();
 
         for _ in 0 .. 5 {
-            pxstack = [
-                Matrix3::from_column_slice(
-                    &[
-                        self.dogs[octave_idx][imidx - 1].get_pixel(c - 1, r - 1).0[0], self.dogs[octave_idx][imidx - 1].get_pixel(c, r - 1).0[0], self.dogs[octave_idx][imidx - 1].get_pixel(c + 1, r - 1).0[0],
-                        self.dogs[octave_idx][imidx - 1].get_pixel(c - 1, r).0[0], self.dogs[octave_idx][imidx - 1].get_pixel(c, r).0[0], self.dogs[octave_idx][imidx - 1].get_pixel(c + 1, r).0[0],
-                        self.dogs[octave_idx][imidx - 1].get_pixel(c - 1, r + 1).0[0], self.dogs[octave_idx][imidx - 1].get_pixel(c, r + 1).0[0], self.dogs[octave_idx][imidx - 1].get_pixel(c + 1, r + 1).0[0]
-                    ]
-                ).div(divisor),
-                Matrix3::from_column_slice(
-                    &[
-                        self.dogs[octave_idx][imidx].get_pixel(c - 1, r - 1).0[0], self.dogs[octave_idx][imidx].get_pixel(c, r - 1).0[0], self.dogs[octave_idx][imidx].get_pixel(c + 1, r - 1).0[0],
-                        self.dogs[octave_idx][imidx].get_pixel(c - 1, r).0[0], self.dogs[octave_idx][imidx].get_pixel(c, r).0[0], self.dogs[octave_idx][imidx].get_pixel(c + 1, r).0[0],
-                        self.dogs[octave_idx][imidx].get_pixel(c - 1, r + 1).0[0], self.dogs[octave_idx][imidx].get_pixel(c, r + 1).0[0], self.dogs[octave_idx][imidx].get_pixel(c + 1, r + 1).0[0]
-                    ]
-                ).div(divisor),
-                Matrix3::from_column_slice(
-                    &[
-                        self.dogs[octave_idx][imidx + 1].get_pixel(c - 1, r - 1).0[0], self.dogs[octave_idx][imidx + 1].get_pixel(c, r - 1).0[0], self.dogs[octave_idx][imidx + 1].get_pixel(c + 1, r - 1).0[0],
-                        self.dogs[octave_idx][imidx + 1].get_pixel(c - 1, r).0[0], self.dogs[octave_idx][imidx + 1].get_pixel(c, r).0[0], self.dogs[octave_idx][imidx + 1].get_pixel(c + 1, r).0[0],
-                        self.dogs[octave_idx][imidx + 1].get_pixel(c - 1, r + 1).0[0], self.dogs[octave_idx][imidx + 1].get_pixel(c, r + 1).0[0], self.dogs[octave_idx][imidx + 1].get_pixel(c + 1, r + 1).0[0]
-                    ]
-                ).div(divisor),
-            ];
 
             grad = Self::compute_gradient(pxstack);
             hess = Self::compute_hessian(pxstack);
             lstq = -lstsq::lstsq(&hess, &grad, EPSILON).unwrap().solution;
-            
+
             if lstq[0].abs() < 0.5 && lstq[1].abs() < 0.5 && lstq[2].abs() < 0.5 {
                 converge = true;
                 break;
@@ -335,9 +337,11 @@ impl Sift {
             r += lstq[1].round() as u32;
             imidx += lstq[2].round() as usize;
 
-            if r < 1 || c < 1 || r >= oct_h - 1 || c >= oct_w - 1 || imidx < 1 || imidx > INTERVAL as usize {
+            if r < self.img_border || c < self.img_border || r >= oct_h - self.img_border || c >= oct_w - self.img_border || imidx < 1 || imidx > INTERVAL as usize {
                 break;
             }
+
+            pxstack = Self::pixel_cube(c, r, &self.dogs[octave_idx][imidx - 1], &self.dogs[octave_idx][imidx], &self.dogs[octave_idx][imidx + 1]);
         }
 
         if !converge {
@@ -345,27 +349,26 @@ impl Sift {
         }
 
         let val_at_extremum = pxstack[1].index((1, 1)) + 0.5 * grad.dot(&lstq);
-        
+
         if val_at_extremum.abs() * INTERVAL < self.contrast_threshold {
             return None;
         }
-
-
+        
         let xy_hess = hess.index((..2, ..2));
         let xy_hess_trace = xy_hess.trace();
         let xy_hess_det = xy_hess.determinant();
         
-        if xy_hess_det <= 0. || self.edge_threshold * xy_hess_trace.powf(2.) >= (self.edge_threshold + 1.).powf(2.) * xy_hess_det {
+        if xy_hess_det <= 0. || self.edge_threshold * xy_hess_trace.powi(2) >= (self.edge_threshold + 1.).powi(2) * xy_hess_det {
             return None;
         }
-        
+
         Some((KeyPoint{
             pcr: (
                 (c as f32 + lstq[0]) * 2_f32.powf(octave_idx as f32),
                 (r as f32 + lstq[1]) * 2_f32.powf(octave_idx as f32)
             ),
             oct: octave_idx + imidx * 2_u32.pow(8) as usize + (((lstq[2] + 0.5) * 255.).round() * 2_f32.powf(16.)) as usize,
-            size: self.sigma * 2_f32.powf((imidx as f32 + lstq[2]) / INTERVAL) * 2_f32.powf(octave_idx as f32 + 1.),
+            size: self.sigma * 2_f32.powf((imidx as f32 + lstq[2]) / INTERVAL) * 2_f32.powi(octave_idx as i32 + 1),
             res: val_at_extremum.abs(),
             angle: 0.
         }, imidx))
@@ -391,47 +394,26 @@ impl Sift {
             });
     }
 
-    fn is_pixel_extremum(im0: Matrix3<f32>, im1: Matrix3<f32>, im2: Matrix3<f32>, threshold: f32) -> bool {
-        let px = im1.index((1, 1));
-        if px.abs() <= threshold {
-            return false;
-        }
-        
-        if px > &0. {
-            for (p0, p2) in zip(im0.iter(), im2.iter()) {
-                if px < p0 || px < p2 {
-                    return false
-                }
-            }
+    fn is_pixel_extremum(px_cube: &[Matrix3<f32>; 3]) -> bool {
+        let px = px_cube[1].index((1, 1));
 
-            for (i, p) in im1.iter().enumerate() {
-                // this is the center pixel, move on
-                if i == 4 {
+        if px > &0. {
+            for (p0, (p1, p2)) in zip(px_cube[0].iter(), zip(px_cube[1].iter(), px_cube[2].iter())) {
+                if px >= p0 && px >= p1 && px >= p2 {
                     continue;
                 }
 
-                if px < p {
-                    return false;
-                }
+                return false;
             }
 
             true
         } else if px < &0. {
-            for (p0, p2) in zip(im0.iter(), im2.iter()) {
-                if px > p0 || px > p2 {
-                    return false
-                }
-            }
-
-            for (i, p) in im1.iter().enumerate() {
-                // this is the center pixel, move on
-                if i == 4 {
+            for (p0, (p1, p2)) in zip(px_cube[0].iter(), zip(px_cube[1].iter(), px_cube[2].iter())) {
+                if px <= p0 && px <= p1 && px <= p2 {
                     continue;
                 }
 
-                if px > p {
-                    return false;
-                }
+                return false;
             }
 
             true
@@ -451,7 +433,6 @@ impl Sift {
         let dx = 0.5 * (px_cube[1].index((2, 1)) - px_cube[1].index((0, 1)));
         let dy = 0.5 * (px_cube[1].index((1, 2)) - px_cube[1].index((1, 0)));
         let ds = 0.5 * (px_cube[2].index((1, 1)) - px_cube[0].index((1, 1)));
-        
         
         Vector3::from([dx, dy, ds])
     }
@@ -487,9 +468,9 @@ impl Sift {
     fn compute_keypoint_orientation(&self, kp: &KeyPoint, octave_idx: usize, oct_w: u32, oct_h: u32, img_idx: usize) -> Vec<KeyPoint> {
         const NUM_BINS: usize = 36;
 
-        let scale = 1.5 * kp.size / 2_f32.powf(octave_idx as f32 + 1.);
+        let scale = 1.5 * kp.size / 2_f32.powi(octave_idx as i32 + 1);
         let radius = (3. * scale).round() as i32;
-        let weight_f = -0.5 / scale.powf(2.);
+        let weight_f = -0.5 / scale.powi(2);
 
         let mut histogram_raw = [0.; NUM_BINS];
         let mut histogram_smooth = [0.; NUM_BINS];
@@ -502,24 +483,24 @@ impl Sift {
         // // let img_data = &img.v[..];
 
         for r in -radius .. radius + 1 {
-            let region_y = (kp.pcr.1 as f32 / 2_f32.powf(octave_idx as f32)).round() as i32 + r;
+            let region_y = (kp.pcr.1 as f32 / 2_f32.powi(octave_idx as i32)).round() as i32 + r;
             if region_y <= 0 || region_y >= oct_h as i32 - 1 {
                 continue;
             }
 
             for c in -radius .. radius + 1 {
-                let region_x = (kp.pcr.0 as f32 / 2_f32.powf(octave_idx as f32)).round() as i32 + c;
+                let region_x = (kp.pcr.0 as f32 / 2_f32.powi(octave_idx as i32)).round() as i32 + c;
                 if region_x <= 0 || region_x >= oct_w as i32 - 1 {
                     continue;
                 }
 
                 let dc = img.get_pixel(region_x as u32 + 1, region_y as u32).0[0] - img.get_pixel(region_x as u32 - 1, region_y as u32).0[0];
-                let dr = img.get_pixel(region_x as u32, region_y as u32 + 1).0[0] - img.get_pixel(region_x as u32, region_y as u32 - 1).0[0];
+                let dr = img.get_pixel(region_x as u32, region_y as u32 - 1).0[0] - img.get_pixel(region_x as u32, region_y as u32 + 1).0[0];
 
-                let grad_mag = (dc.powf(2.) + dr.powf(2.)).sqrt();
+                let grad_mag = (dc.powi(2) + dr.powi(2)).sqrt();
                 let grad_deg = dr.atan2(dc).to_degrees();
                 
-                let weight = (weight_f * ((r as f32).powf(2.) + (c as f32).powf(2.))).exp();
+                let weight = (weight_f * (r.pow(2) + c.pow(2)) as f32).exp();
 
                 let hist_idx = (grad_deg * NUM_BINS as f32 / 360.).round() as i32;
                 let hist_idx = if hist_idx < 0 {
@@ -536,7 +517,7 @@ impl Sift {
     
         for n in 0 .. NUM_BINS {
             let n_1 = if n == 0 {
-                35
+                NUM_BINS - 1
             } else {
                 n - 1
             };
@@ -782,6 +763,12 @@ impl Sift {
         Ok(descriptors)
     }
 
+    // try loading from Gaussian pyramid already created
+    fn load_gaussian_pyramid(&mut self) -> Result<()> {
+
+        Ok(())
+    }
+    
     fn unpack_octave(kp: &KeyPoint) -> (i32, usize, f32) {
         let mut octave = kp.oct as i32 & 255;
         let layer = (kp.oct >> 8) & 255;
@@ -798,26 +785,123 @@ impl Sift {
 
         (octave, layer, scale)
     }
+
+    fn pixel_cube(c: u32, r: u32, img0: &ImageF32, img1: &ImageF32, img2: &ImageF32) -> [Matrix3<f32>; 3] {
+        let m0 = Matrix3::from_column_slice(&[
+            img0.index((c - 1, r - 1)).0[0], img0.index((c, r - 1)).0[0], img0.index((c + 1, r - 1)).0[0],
+            img0.index((c - 1, r)).0[0], img0.index((c, r)).0[0], img0.index((c + 1, r)).0[0],
+            img0.index((c - 1, r + 1)).0[0], img0.index((c, r + 1)).0[0], img0.index((c + 1, r + 1)).0[0],
+        ]).div(255.);
+        let m1 = Matrix3::from_column_slice(&[
+            img1.index((c - 1, r - 1)).0[0], img1.index((c, r - 1)).0[0], img1.index((c + 1, r - 1)).0[0],
+            img1.index((c - 1, r)).0[0], img1.index((c, r)).0[0], img1.index((c + 1, r)).0[0],
+            img1.index((c - 1, r + 1)).0[0], img1.index((c, r + 1)).0[0], img1.index((c + 1, r + 1)).0[0],
+        ]).div(255.);
+        let m2 = Matrix3::from_column_slice(&[
+            img2.index((c - 1, r - 1)).0[0], img2.index((c, r - 1)).0[0], img2.index((c + 1, r - 1)).0[0],
+            img2.index((c - 1, r)).0[0], img2.index((c, r)).0[0], img2.index((c + 1, r)).0[0],
+            img2.index((c - 1, r + 1)).0[0], img2.index((c, r + 1)).0[0], img2.index((c + 1, r + 1)).0[0],
+        ]).div(255.);
+
+        [m0, m1, m2]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     // use std::f32::EPSIL
 
+    // use std::f32::EPSILON;
+
+    // use crate::utils::ImageOps;
+
     use super::Sift;
 
     use anyhow::{Result, Ok};
+    // use nalgebra::{Matrix3, Vector3};
+    // use image::GenericImageView;
     // use image::imageops::resize;
 
     #[test]
     fn sift() -> Result<()> {
         let mut im = Sift::new("data/1_small.png")?;
         // im.visualize();
-        
+        // let hess = Matrix3::from_column_slice(&[0.009998869, -0.0027434397, -0.005461002, -0.0027434397, 0.006252274, 0.003329184, -0.005461002, 0.003329184, 0.014249377]);
+        // let grad = Vector3::from([0.0024522897, -0.0006582383, 0.0043327026]);
+        // let lstq = -lstsq::lstsq(&hess, &grad, EPSILON).unwrap().solution;
+        // println!("{:?}", lstq);
         im.generate()?;
 
         Ok(())
     }
+
+    // #[test]
+    // fn test_blur_diff() -> Result<()> {
+    //     let imrs = image::open("data/1_small.png")?.grayscale();
+    //     let impy = image::open("data/sift/base-py.png")?;
+
+    //     let mut diff_original = 0;
+
+    //     // for h in 0 .. impy.height() {
+    //     //     for w in 0 .. impy.width() {
+    //     //         let diff = (imrs.get_pixel(w, h).0[0] - impy.get_pixel(w, h).0[0]);
+
+    //     //         if diff > 0 {
+    //     //             diff_original += 1;
+    //     //             if diff > 1 {
+    //     //                 return Err(anyhow!("diff greater than 1"));
+    //     //             }
+    //     //         }
+    //     //     }
+    //     // }
+
+    //     println!("diff original: {}",diff_original);
+    //     let mut sigma: f32 = 1.5;
+    //     let impy = image::open("data/sift/base-blur-py.png")?;
+    //     let mut total_err;
+
+    //     let mut sig_err_list = Vec::new();
+
+    //     loop {
+    //         if sigma > 3. {
+    //             break;
+    //         }
+    //         let sig = (sigma.powi(2) - (2_f32 * 0.5).powi(2)).max(0.01).sqrt();
+    //         let mut sig_err = (sigma, sig, 0);
+    //         total_err = 0;
+
+    //         let blurred = imrs.blur(sigma);
+    //         for h in 0 .. impy.height() {
+    //             for w in 0 .. impy.width() {
+    //                 let diff = (impy.get_pixel(w, h).0[0] - blurred.get_pixel(w, h).0[0]);
+    //                 if diff == 0 {
+    //                     continue;
+    //                 }
+
+    //                 total_err += 1;
+
+    //                 if diff < 1 {
+    //                     continue;
+    //                 }
+
+    //                 if diff > 1 {
+    //                     sig_err.2 += 1;
+    //                 }
+    //             }
+    //         }
+    //         println!("{:?} {}", sig_err, total_err);
+    //         sig_err_list.push(sig_err);
+    //         sigma += 0.0001;
+    //     }
+        
+    //     sig_err_list.sort_by(|a, b| {
+    //         a.2.cmp(&b.2)
+    //     });
+
+    //     println!("{:?}", &sig_err_list[0 .. 10]);
+
+    //     Ok(())
+    // }
 
     // #[test]
     // fn resize_img() -> Result<()> {
@@ -831,17 +915,17 @@ mod tests {
     //     Ok(())
     // }
 
-    #[test]
-    fn blur_img() -> Result<()> {
-        let im = image::open("data/1_small.png")?.grayscale();
+    // #[test]
+    // fn blur_img() -> Result<()> {
+    //     let im = image::open("data/1_small.png")?.grayscale();
         
-        // let k = resize(&im, im.width() / 2, im.height() / 2, image::imageops::FilterType::Nearest);
+    //     // let k = resize(&im, im.width() / 2, im.height() / 2, image::imageops::FilterType::Nearest);
 
-        // let _im = Sift::new("data/1_mini.png")?;
-        // let l = resize(&_im.img, _im.img.width()/ 2, _im.img.height() / 2, image::imageops::FilterType::Nearest);
+    //     // let _im = Sift::new("data/1_mini.png")?;
+    //     // let l = resize(&_im.img, _im.img.width()/ 2, _im.img.height() / 2, image::imageops::FilterType::Nearest);
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
 
 
