@@ -1,6 +1,6 @@
 // use image::{ImageBuff};
 
-use std::f32::consts::PI;
+use std::{f32::consts::PI, fs};
 
 use anyhow::Result;
 use image::{save_buffer_with_format, ImageBuffer, Luma, Pixel};
@@ -18,6 +18,7 @@ pub trait ImageOps {
     fn draw(&self, path: &str) -> Result<()>;
     fn resize(&self, new_width: u32, new_height: u32) -> ImageF32;
     fn subtract(&self, rhs: &ImageF32) -> ImageF32;
+    fn draw_matrix(&self, path: &str) -> Result<()>;
 
     fn horizontal_sample(&self, new_width: u32, s: &mut ImageOpsFilter) -> ImageF32;
     fn vertical_sample(&self, new_height: u32, s: &mut ImageOpsFilter) -> ImageF32;
@@ -58,6 +59,22 @@ impl ImageOps for ImageF32 {
             image::ColorType::L8,
             image::ImageFormat::Png,
         )?;
+        Ok(())
+    }
+
+    fn draw_matrix(&self, path: &str) -> Result<()> {
+        let mut str = String::new();
+        for r in 0 .. self.height() {
+            for c in 0 .. self.width() {
+                str += self.get_pixel(c, r).0[0].round().to_string().as_str();
+                str += " ";
+            }
+
+            str += "\n";
+        }
+
+        fs::write(path, str)?;
+
         Ok(())
     }
 
