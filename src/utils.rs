@@ -2,9 +2,12 @@
 
 use std::{f32::consts::PI, fs};
 
+use rand::{seq::SliceRandom, prelude::ThreadRng};
 use anyhow::Result;
 use image::{save_buffer_with_format, ImageBuffer, Luma, Pixel};
+use ndarray_rand::rand::thread_rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
+use ndarray::{Array1};
 
 pub type ImageF32 = ImageBuffer<Luma<f32>, Vec<f32>>;
 
@@ -416,15 +419,107 @@ where
         a
     }
 }
+
 fn gaussian(x: f32, r: f32) -> f32 {
     ((2.0 * PI).sqrt() * r).recip() * (-x.powi(2) / (2.0 * r.powi(2))).exp()
 }
 
+pub struct Batch {
+    idx: Vec<usize>,
+    // size of the entire set
+    size: usize,
+    // batch size
+    batch_size: usize,
+    start: usize,
+}
+
+impl Batch {
+    pub fn new(size: usize, batch_size: usize) -> Self {
+        let mut rng = thread_rng();
+        let mut idx = Array1::range(0., size as f32, 1.).map_mut(|f| *f as usize).to_vec();
+        idx.shuffle(&mut rng);
+
+        Self {
+            idx,
+            size,
+            start: 0,
+            batch_size }
+    }
+}
+
+impl Iterator for Batch {
+    type Item = Vec<usize>;
+    
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.start > self.size - 1 {
+            return None;
+        }
+        let id = (self.start + self.batch_size).min(self.size);
+        let b = self.idx[self.start .. id].to_vec();
+
+        self.start += self.batch_size;
+        
+        Some(b)
+    }
+}
+
+// pub fn get_batch(n: usize, batch_size: usize) -> Vec<Vec<usize>> {
+//     let mut rng = thread_rng();
+//     let mut idx = Array1::range(0., n as f32, 1.).map_mut(|f| *f as usize);
+//     // .to_vec();
+
+//     idx.shuffle(&mut rng);
+
+//     let mut batch = vec![];
+
+//     let mut idx_start = 0;
+
+//     loop {
+//         let id = (idx_start + batch_size).min(n);
+//         let b = idx[idx_start .. id].to_vec();
+
+//         batch.push(b);
+
+        
+//         if idx_start > n - 1 {
+//             break;
+//         }
+//     }
+//     batch
+// }
+
+// fn permutate_usize(a: Array1<usize>) -> Array1<usize> {
+//     let mut result = Array1::from_vec(vec![0; a.len()]);
+
+//     let mut moved_elements = 0;
+//     for i in 0..a.len() {
+//         // let perm_i = a.indices[i];
+//     //     Zip::from(result.index_axis_mut(axis, perm_i))
+//     //         .and(self.index_axis(axis, i))
+//     //         .apply(|to, from| {
+//     //             copy_nonoverlapping(from, to.as_mut_ptr(), 1);
+//     //             moved_elements += 1;
+//     //         });
+//     }
+//     result
+// }
+
 #[cfg(test)]
 mod tests {
-    // use anyhow::Result;
+    use anyhow::Result;
+
+    use super::Batch;
+
     // use image::{GenericImageView, imageops};
 
+    #[test]
+    fn batch() -> Result<()> {
+        let b = Batch::new(33, 5);
+        for i in b {
+            println!("{:?}", i);
+        }
+        Ok(())
+    }
     // #[test]
     // fn blur() -> Result<()> {
     // let im = image::open("data/1_small.png").unwrap();
