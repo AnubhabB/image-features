@@ -2,12 +2,9 @@
 
 use std::{f32::consts::PI, fs};
 
-use rand::{seq::SliceRandom};
 use anyhow::Result;
 use image::{save_buffer_with_format, ImageBuffer, Luma, Pixel};
-use ndarray_rand::rand::thread_rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
-use ndarray::{Array1};
 
 pub type ImageF32 = ImageBuffer<Luma<f32>, Vec<f32>>;
 
@@ -424,59 +421,59 @@ fn gaussian(x: f32, r: f32) -> f32 {
     ((2.0 * PI).sqrt() * r).recip() * (-x.powi(2) / (2.0 * r.powi(2))).exp()
 }
 
-pub struct Batch {
-    idx: Vec<usize>,
-    // size of the entire set
-    size: usize,
-    // batch size
-    batch_size: usize,
-    start: usize,
-}
+// pub struct Batch {
+//     idx: Vec<usize>,
+//     // size of the entire set
+//     size: usize,
+//     // batch size
+//     batch_size: usize,
+//     start: usize,
+// }
 
-impl Batch {
-    pub fn new(size: usize, batch_size: usize) -> Self {
-        let mut rng = thread_rng();
-        let mut idx = Array1::range(0., size as f32, 1.).map_mut(|f| *f as usize).to_vec();
-        idx.shuffle(&mut rng);
+// impl Batch {
+//     pub fn new(size: usize, batch_size: usize) -> Self {
+//         let mut rng = thread_rng();
+//         let mut idx = Array1::range(0., size as f32, 1.).map_mut(|f| *f as usize).to_vec();
+//         idx.shuffle(&mut rng);
 
-        Self {
-            idx,
-            size,
-            start: 0,
-            batch_size }
-    }
-}
+//         Self {
+//             idx,
+//             size,
+//             start: 0,
+//             batch_size }
+//     }
+// }
 
-impl Iterator for Batch {
-    type Item = Vec<usize>;
+// impl Iterator for Batch {
+//     type Item = Vec<usize>;
     
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.start > self.size - 1 {
-            return None;
-        }
-        let id = (self.start + self.batch_size).min(self.size);
-        let b = self.idx[self.start .. id].to_vec();
+//     fn next(&mut self) -> Option<Self::Item> {
+//         if self.start > self.size - 1 {
+//             return None;
+//         }
+//         let id = (self.start + self.batch_size).min(self.size);
+//         let b = self.idx[self.start .. id].to_vec();
 
-        self.start += self.batch_size;
+//         self.start += self.batch_size;
         
-        Some(b)
-    }
-}
+//         Some(b)
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
 
-    use super::Batch;
+    // use super::Batch;
 
     // use image::{GenericImageView, imageops};
 
-    #[test]
-    fn batch() -> Result<()> {
-        let b = Batch::new(33, 5);
-        for i in b {
-            println!("{:?}", i);
-        }
-        Ok(())
-    }
+    // #[test]
+    // fn batch() -> Result<()> {
+    //     let b = Batch::new(33, 5);
+    //     for i in b {
+    //         println!("{:?}", i);
+    //     }
+    //     Ok(())
+    // }
 }
