@@ -2,7 +2,7 @@
 
 use std::{f32::consts::PI, fs};
 
-use rand::{seq::SliceRandom, prelude::ThreadRng};
+use rand::{seq::SliceRandom};
 use anyhow::Result;
 use image::{save_buffer_with_format, ImageBuffer, Luma, Pixel};
 use ndarray_rand::rand::thread_rng;
@@ -463,47 +463,6 @@ impl Iterator for Batch {
     }
 }
 
-// pub fn get_batch(n: usize, batch_size: usize) -> Vec<Vec<usize>> {
-//     let mut rng = thread_rng();
-//     let mut idx = Array1::range(0., n as f32, 1.).map_mut(|f| *f as usize);
-//     // .to_vec();
-
-//     idx.shuffle(&mut rng);
-
-//     let mut batch = vec![];
-
-//     let mut idx_start = 0;
-
-//     loop {
-//         let id = (idx_start + batch_size).min(n);
-//         let b = idx[idx_start .. id].to_vec();
-
-//         batch.push(b);
-
-        
-//         if idx_start > n - 1 {
-//             break;
-//         }
-//     }
-//     batch
-// }
-
-// fn permutate_usize(a: Array1<usize>) -> Array1<usize> {
-//     let mut result = Array1::from_vec(vec![0; a.len()]);
-
-//     let mut moved_elements = 0;
-//     for i in 0..a.len() {
-//         // let perm_i = a.indices[i];
-//     //     Zip::from(result.index_axis_mut(axis, perm_i))
-//     //         .and(self.index_axis(axis, i))
-//     //         .apply(|to, from| {
-//     //             copy_nonoverlapping(from, to.as_mut_ptr(), 1);
-//     //             moved_elements += 1;
-//     //         });
-//     }
-//     result
-// }
-
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
@@ -520,39 +479,4 @@ mod tests {
         }
         Ok(())
     }
-    // #[test]
-    // fn blur() -> Result<()> {
-    // let im = image::open("data/1_small.png").unwrap();
-    // let dim = im.dimensions();
-    // let im = im.grayscale().resize((dim.0 * 2) as u32, (dim.1 * 2) as u32, imageops ::FilterType::Nearest);
-
-    // let sigma = 1.6_f32.powf(2.) - (2. * 0.5_f32).powf(2.).sqrt();
-
-    // let im1 = blur_f32(&im.to_luma32f(), sigma);
-    // let im2 = im.blur(sigma).to_luma8();
-
-    // println!("{:?}", &im1.to_vec()[0..1000]);
-    // println!("{:?}", &im2.to_vec()[0..1000]);
-
-    //     Ok(())
-    // }
-
-    // #[test]
-    // fn lstsq() -> Result<()> {
-    //     use nalgebra::{OMatrix, OVector, U3};
-    //     // So: [0.5, 0.0, 0.0] [-1.0, 0.0, 0.0, 0.0, 0.0, 0.25, 0.0, 0.25, 0.0] -> -(lstsq(hess, grad)[0]) -> [ 0.5, -0. , -0. ]
-
-    //     let hess = OMatrix::<f32, U3, U3>::from_row_slice(&[
-    //         -1.0, 0.0, 0.0,
-    //         0.0, 0.0, 0.25,
-    //         0.0, 0.25, 0.0
-    //     ]);
-
-    //     let grad = OVector::<f32, U3>::from_row_slice(&[0.5, 0.0, 0.0]);
-
-    //     let lst = -(lstsq::lstsq(&hess, &grad, EPSILON).unwrap().solution);
-
-    //     println!("{:?}", &lst);
-    //     Ok(())
-    // }
 }
